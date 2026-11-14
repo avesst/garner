@@ -1,6 +1,7 @@
 # garner design
 
-Status: draft, pre-implementation. Decisions recorded 2026-10-13.
+Status: MVP implemented (see `plan.md`). Decisions recorded 2026-10-13,
+updated 2026-11-14 with choices made during implementation.
 
 ## 1. Purpose
 
@@ -218,7 +219,15 @@ always matches the signatures on the current metadata.
 `public/` can be served by the built-in server or directly from disk by the
 reverse proxy. Which proxy is not fixed; it must follow symlinks (in nginx,
 `disable_symlinks off`, the default). The pool is shared and append-only between GC runs.
-Snapshots contain only metadata.
+Snapshots contain only metadata, plus a fixed `pool` link per format (and
+per rpm release and architecture) so clients pinned to `/snapshots/<id>/`
+can download packages.
+
+The built-in server ignores `If-Modified-Since` for metadata outside
+`by-hash/` and the pool: `Last-Modified` has one-second resolution, so a
+client could get `304` for an `InRelease` changed by a second publish
+within the same second. A proxy serving `public/` from disk has the same
+limit; publishes are debounced (section 3), which makes it rare.
 
 ### Supported clients
 
@@ -269,6 +278,7 @@ storage:
   path: /var/lib/garner
   gc_grace: 10m
   index_history: 1h           # carry over index files from this window
+  snapshot_retention: 30      # snapshots kept, newest first
 
 signing:
   keys:                       # first key signs; all are published
@@ -416,7 +426,7 @@ not trusted.
 
 | Type | Releases API | Asset download |
 |---|---|---|
-| `github` | `/repos/{o}/{r}/releases` | `browser_download_url`; `digest` field when present |
+| `github` | `/repos/{o}/{r}/releases` | the API asset `url` with `Accept: application/octet-stream` (works for private repositories); `digest` field when present |
 | `forgejo`/`gitea` | `/api/v1/repos/{o}/{r}/releases` | `browser_download_url` |
 | `gitlab` | `/api/v4/projects/{id}/releases` | `assets.links[]` (often Generic Package Registry or external URLs) |
 
@@ -433,7 +443,8 @@ not trusted.
 
 - The repo list is fetched on every poll; new repos are included
   automatically.
-- `include`/`exclude` are globs on repo names. Archived repos and forks are
+- `include`/`exclude` are globs on repo names (`exclude` also applies to
+  asset names, see below). Archived repos and forks are
   skipped by default. GitLab subgroups are walked recursively by default.
 - Repos without matching assets are ignored but listed in status.
 
@@ -453,9 +464,11 @@ not trusted.
 
 - Candidates: `*.deb` and `*.rpm`, excluding `*.src.rpm`, `*-dbgsym*`,
   `*-debuginfo*`, plus the source's `exclude` list.
-- `assets` rules are evaluated in order; the first match wins and sets
-  `suite` (deb) and/or `release` (rpm). With no rules, the target is
-  `stable`.
+- `assets` rules are evaluated in order; the first rule that matches the
+  asset name and sets a target for the asset's format wins: `suite` for deb,
+  `release` for rpm. A `*` rule with only `suite` therefore does not
+  swallow rpm assets. With no rules, the target is `stable`; with rules but
+  none applying, the asset is skipped.
 - If two assets in one release map to the same (name, version, arch,
   distribution), both are skipped and a conflict is recorded. garner never
   guesses.
@@ -463,7 +476,8 @@ not trusted.
 **Verification.**
 
 - If the forge exposes an asset digest, or the release contains a checksum file
-  (`checksums.txt`, `SHA256SUMS`, `*.sha256`), the asset must match it. A
+  (`checksums.txt`, `*_checksums.txt` as GoReleaser names it, `SHA256SUMS`,
+  `*.sha256`), the asset must match it. A
   mismatch rejects the asset.
 - `verify: opportunistic` accepts assets without a checksum and marks them
   `unverified`. `verify: required` rejects them.
@@ -532,6 +546,10 @@ A native Go implementation can replace it later. garner carries over old
 repodata itself instead of using `createrepo_c --retain-old-md`, because each
 snapshot is rendered into a fresh directory.
 
+rpm support needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`
+(the container image ships them). Without them, `serve` disables rpm and
+says which tools are missing.
+
 ### Rollback and pinning
 
 - `garner snapshot list` lists snapshots. `garner snapshot rollback <id>`
@@ -539,11 +557,16 @@ snapshot is rendered into a fresh directory.
   re-signed and with current index history (step 4), so clients mid-update
   are not broken. The old snapshot stays unchanged.
 - Clients can pin to `/snapshots/<id>/...`.
-- Snapshot retention: the newest 30 (configurable).
+- A rollback also sets placements to match the rolled-back set: its
+  packages become active again and other active packages are removed, so
+  the next publish keeps the rolled-back state.
+- Snapshot retention: the newest `storage.snapshot_retention` (default 30,
+  at least 2).
 
 ### Garbage collection
 
-1. Retention removes packages from future snapshots only.
+1. Retention removes packages from future snapshots only: their placements
+   are marked `removed`.
 2. A blob is deleted only when no retained snapshot references it.
 3. A replaced snapshot is not deleted until `storage.gc_grace` has passed
    (default 10 min), so requests already resolved through it can finish.
@@ -637,7 +660,7 @@ snapshot is rendered into a fresh directory.
 
 Commands marked *local* operate on the database directly and must run where
 the configuration and database are reachable. The others call the API with
-`--url` and `GARNER_TOKEN`.
+`--url` (or `GARNER_URL`) and `GARNER_TOKEN=<name>:<secret>`.
 
 | Command | Mode | Scope |
 |---|---|---|
@@ -650,6 +673,8 @@ the configuration and database are reachable. The others call the API with
 | `remove NAME [--version] [--arch]` | API | admin |
 | `owner list` / `owner set NAME OWNER` | API | admin |
 | `sync SOURCE` | API | publish |
+| `publish` | API | publish |
+| `packages list` | API | none |
 | `approve PACKAGE` / `conflicts list` | API | publish |
 | `snapshot list` / `snapshot rollback ID` | API | publish |
 | `gc` | API | admin |
@@ -672,6 +697,7 @@ the configuration and database are reachable. The others call the API with
 | `POST /api/v1/snapshots/{id}/rollback` | publish |
 | `POST /api/v1/reload` | admin |
 | `POST /api/v1/gc` | admin |
+| `POST /api/v1/publish` | publish |
 | `POST/GET/DELETE /api/v1/tokens` | admin |
 
 ### Landing page

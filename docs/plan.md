@@ -1,6 +1,6 @@
 # garner implementation plan
 
-Status: draft, 2026-11-14. The design is in `design.md`; this file only says
+Status: MVP implemented, 2026-11-14. The design is in `design.md`; this file only says
 in which order to build it and when each piece is done. Update it as slices
 land.
 
@@ -24,27 +24,39 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | 2 | Configuration: load, validate, `config validate`, reload on `SIGHUP` (section 5) | Table tests cover valid and invalid files; an invalid reload keeps the old config | Done; `SIGHUP` wiring waits for `serve` (slice 6) |
 | 3 | Database: SQLite, goose migrations, `flock` guard (sections 6, 12) | Migrations apply on SQLite; CI also applies them to PostgreSQL; a second process refuses to start | Done |
 | 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | Done; dpkg's vectors checked once, not committed (GPL), tests compare with `dpkg` instead |
-| 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | |
-| 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, landing page, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | |
-| 7 | Snapshot list, rollback, GC (section 9) | A rollback is a new snapshot; GC removes only unreferenced blobs and respects `gc_grace` | |
-| 8 | rpm: `createrepo_c`, re-signing with `rpmsign`, repodata history (sections 4, 9, 10) | `dnf install` works in `almalinux:10` and `fedora` containers with `gpgcheck` and `repo_gpgcheck` on | |
+| 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | Done; `gpgv` in unit tests, `sqv` through apt on Debian 13 and Ubuntu 26.04 |
+| 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, landing page, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | Done (`just e2e`); without index history the race test fails with 404 |
+| 7 | Snapshot list, rollback, GC (section 9) | A rollback is a new snapshot; GC removes only unreferenced blobs and respects `gc_grace` | Done |
+| 8 | rpm: `createrepo_c`, re-signing with `rpmsign`, repodata history (sections 4, 9, 10) | `dnf install` works in `almalinux:10` and `fedora` containers with `gpgcheck` and `repo_gpgcheck` on | Done (`just e2e`, garner from its container image); dnf refuses a bad `repomd.xml.asc` |
 
 ## Later MVP steps
 
-Planned in slices when step 1 is done.
+- Step 2: upload API and CLI, tokens, name ownership. Done.
+- Step 3: GitHub sync. Done; tested against fake forges and once against
+  a public GitHub repository (unauthenticated).
+- Step 4: Forgejo/Gitea, GitLab and GitHub Enterprise Server clients. Done;
+  tested against TLS test servers that mimic their APIs, not against real
+  instances.
+- Step 5: metrics, health endpoints, container image, systemd unit example.
+  Done. Packages for garner itself (nfpm) are not done: see the decisions
+  below.
 
-- Step 2: upload API and CLI, tokens, name ownership.
-- Step 3: GitHub sync.
-- Step 4: Forgejo/Gitea, GitLab and GitHub Enterprise Server clients.
-- Step 5: metrics, health endpoints, container image, packages for garner.
+## Not verified yet
+
+- CI has not run on Forgejo. `just e2e` needs Docker and runs only locally.
+- No sync against a real Forgejo, GitLab or GitHub Enterprise Server, and
+  none against GitHub with a token or an organization.
+- The systemd unit example is checked with `systemd-analyze verify` only.
+- Signing key rotation (re-signing every rpm on reload) has no end-to-end
+  test.
 
 ## Decisions to make when their slice arrives
 
 | Decision | Needed by | Current recommendation |
 |---|---|---|
-| CLI library: standard `flag` or a framework | Slice 1 | Standard library unless subcommand handling gets awkward |
-| Snapshot retention default | Slice 7 | By age with a minimum count, plus `snapshot keep ID` |
-| rpm when its tools are missing | Slice 8 | rpm off, with a clear startup error |
+| CLI library: standard `flag` or a framework | Slice 1 | Implemented with `flag` plus a helper that accepts flags after positional arguments |
+| Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
+| rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | nfpm |
 | Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
@@ -57,5 +69,7 @@ Each is asked for before the slice that needs it.
 - Approved and added: `go.yaml.in/yaml/v3` (slice 2), `modernc.org/sqlite`
   and `pressly/goose` (slice 3), `github.com/ulikunitz/xz` and
   `github.com/klauspost/compress` (slice 4; the xz module also writes
-  `Packages.xz` in slice 6). ULIDs are a local implementation.
-- Named in the design, not yet added: `ProtonMail/go-crypto` (slice 5).
+  `Packages.xz` in slice 6), `github.com/ProtonMail/go-crypto` (slice 5,
+  which brings `cloudflare/circl`).
+- Local implementations instead of dependencies: ULIDs, Prometheus metrics
+  text format, forge API clients.
