@@ -1,0 +1,29 @@
+# garner configuration. Set public_url to the URL clients use, then run
+# garner init (see the systemd unit for how). The full set of options is in
+# /usr/share/doc/garner/design.md.gz, section 5.
+
+server:
+  listen: ":8080"
+  # The URL apt and dnf clients use; it goes into the client files and the
+  # landing page.
+  public_url: http://localhost:8080
+  # Uploads need HTTPS through a trusted proxy, or loopback.
+  trusted_proxies: []
+  # allow_insecure_auth: true   # isolated labs only
+
+log:
+  format: text
+
+storage:
+  path: /var/lib/garner
+
+database:
+  url: sqlite:///var/lib/garner/garner.db
+
+deb:
+  architectures: [amd64]
+  suites: [stable]
+
+rpm:
+  architectures: [x86_64]
+  releases: [stable]

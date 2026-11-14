@@ -29,5 +29,9 @@ e2e:
 build:
     CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version={{version}}' -o bin/garner ./cmd/garner
 
+# Debian package of garner in bin/; GOARCH=arm64 just deb for arm64.
+deb:
+    scripts/build-deb.sh
+
 clean:
     rm -rf bin

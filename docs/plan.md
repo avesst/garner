@@ -38,8 +38,8 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
   tested against TLS test servers that mimic their APIs, not against real
   instances.
 - Step 5: metrics, health endpoints, container image, systemd unit example.
-  Done. Packages for garner itself (nfpm) are not done: see the decisions
-  below.
+  Done. A `.deb` of garner itself is built with `just deb`; an `.rpm` is
+  not done (see the decisions below).
 
 ## Not verified yet
 
@@ -58,7 +58,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
 | rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
-| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | nfpm |
+| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | `.deb` built with `dpkg-deb` (`just deb`), tested in a Debian 13 systemd container; `.rpm` open |
 | Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
 | License | Before the first public release | Open |
 
