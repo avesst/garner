@@ -23,7 +23,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | 1 | Skeleton: module, `cmd/garner`, CI running `go vet` and `go test` | CI passes on push | Done; CI not yet run |
 | 2 | Configuration: load, validate, `config validate`, reload on `SIGHUP` (section 5) | Table tests cover valid and invalid files; an invalid reload keeps the old config | Done; `SIGHUP` wiring waits for `serve` (slice 6) |
 | 3 | Database: SQLite, goose migrations, `flock` guard (sections 6, 12) | Migrations apply on SQLite; CI also applies them to PostgreSQL; a second process refuses to start | Done |
-| 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | |
+| 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | Done; dpkg's vectors checked once, not committed (GPL), tests compare with `dpkg` instead |
 | 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | |
 | 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, landing page, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | |
 | 7 | Snapshot list, rollback, GC (section 9) | A rollback is a new snapshot; GC removes only unreferenced blobs and respects `gc_grace` | |
@@ -55,9 +55,7 @@ Planned in slices when step 1 is done.
 Each is asked for before the slice that needs it.
 
 - Approved and added: `go.yaml.in/yaml/v3` (slice 2), `modernc.org/sqlite`
-  and `pressly/goose` (slice 3).
+  and `pressly/goose` (slice 3), `github.com/ulikunitz/xz` and
+  `github.com/klauspost/compress` (slice 4; the xz module also writes
+  `Packages.xz` in slice 6). ULIDs are a local implementation.
 - Named in the design, not yet added: `ProtonMail/go-crypto` (slice 5).
-- Expected, not yet approved: xz and zstd decompression for `.deb` members
-  (slice 4; `control.tar` and `data.tar` may be gz, xz or zst), a ULID
-  library or a small local implementation (slice 4, for package ids), an xz
-  writer for `Packages.xz` (slice 6).
