@@ -238,3 +238,15 @@ func generate(path, name, email string, cfg *packet.Config) (string, error) {
 	}
 	return strings.ToUpper(fmt.Sprintf("%x", e.PrimaryKey.Fingerprint)), nil
 }
+
+// ExpiryDays returns the days until the signing key expires, and false
+// for a key without expiry.
+func (k *Keyring) ExpiryDays() (float64, bool) {
+	e := k.signer()
+	id := e.PrimaryIdentity()
+	if id == nil || id.SelfSignature == nil || id.SelfSignature.KeyLifetimeSecs == nil || *id.SelfSignature.KeyLifetimeSecs == 0 {
+		return 0, false
+	}
+	expires := e.PrimaryKey.CreationTime.Add(time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second)
+	return time.Until(expires).Hours() / 24, true
+}

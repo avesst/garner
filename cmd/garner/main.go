@@ -15,10 +15,29 @@ var version string
 
 const usage = `Usage: garner <command> [arguments]
 
-Commands:
-  config validate [FILE]   Check a configuration file (default ` + config.DefaultPath + `).
-  version                  Print the version and exit.
-  help                     Show this help.
+Local commands (run where the configuration and database are):
+  serve [--config FILE]            Run the server.
+  init [--config FILE]             Create storage, the database, a signing key
+                                   (when none is configured) and an admin token.
+  config validate [FILE]           Check a configuration file (default ` + config.DefaultPath + `).
+  token create|list|revoke         Manage tokens; with --url, through the API.
+
+API commands (--url or GARNER_URL; GARNER_TOKEN=name:secret):
+  upload [--suite S] [--release R] FILES...
+  remove NAME [--version V] [--arch A] [--distribution D]
+  owner list | owner set NAME OWNER
+  sync SOURCE
+  approve PACKAGE_ID
+  conflicts list [--all]
+  packages list [--name N] [--distribution D] [--all]
+  snapshot list | snapshot rollback ID
+  publish
+  gc
+  reload
+  status
+
+  version                          Print the version and exit.
+  help                             Show this help.
 `
 
 func main() {
@@ -32,9 +51,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	switch args[0] {
+	cmd, rest := args[0], args[1:]
+	switch cmd {
 	case "config":
-		return runConfig(args[1:], stdout, stderr)
+		return runConfig(rest, stdout, stderr)
+	case "serve":
+		return runServe(rest, stderr)
+	case "init":
+		return runInit(rest, stdout, stderr)
+	case "token":
+		return runToken(rest, stdout, stderr)
+	case "upload", "remove", "owner", "sync", "approve", "conflicts", "packages",
+		"snapshot", "publish", "gc", "reload", "status":
+		return runAPI(cmd, rest, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "garner", versionString())
 		return 0
@@ -42,7 +71,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "garner: unknown command %q\n\n%s", args[0], usage)
+		fmt.Fprintf(stderr, "garner: unknown command %q\n\n%s", cmd, usage)
 		return 2
 	}
 }

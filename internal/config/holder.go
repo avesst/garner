@@ -36,3 +36,21 @@ func (h *Holder) Reload() (*Config, error) {
 	h.cur.Store(cfg)
 	return cfg, nil
 }
+
+// Path is the file the configuration is loaded from.
+func (h *Holder) Path() string { return h.path }
+
+// ReloadWith validates the file again and, if check accepts the new
+// configuration, makes it active. check rejects changes that need a
+// restart.
+func (h *Holder) ReloadWith(check func(old, new *Config) error) (*Config, error) {
+	cfg, err := Load(h.path)
+	if err != nil {
+		return h.cur.Load(), err
+	}
+	if err := check(h.cur.Load(), cfg); err != nil {
+		return h.cur.Load(), err
+	}
+	h.cur.Store(cfg)
+	return cfg, nil
+}

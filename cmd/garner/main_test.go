@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -46,5 +48,29 @@ func TestVersionStringPrefersLinkTimeVersion(t *testing.T) {
 	version = "1.2.3"
 	if got := versionString(); got != "1.2.3" {
 		t.Errorf("versionString() = %q, want %q", got, "1.2.3")
+	}
+}
+
+func TestParseInterspersed(t *testing.T) {
+	tests := []struct {
+		args      []string
+		wantPos   []string
+		wantSuite string
+	}{
+		{[]string{"a.deb", "--suite", "noble", "b.deb"}, []string{"a.deb", "b.deb"}, "noble"},
+		{[]string{"--suite=noble", "a.deb"}, []string{"a.deb"}, "noble"},
+		{[]string{"a.deb", "--", "--suite"}, []string{"a.deb", "--suite"}, ""},
+		{nil, nil, ""},
+	}
+	for _, tt := range tests {
+		fs := newFlags("test", io.Discard)
+		suite := fs.String("suite", "", "")
+		pos, err := parse(fs, tt.args)
+		if err != nil {
+			t.Fatalf("%v: %v", tt.args, err)
+		}
+		if !slices.Equal(pos, tt.wantPos) || *suite != tt.wantSuite {
+			t.Errorf("%v: pos %q suite %q, want %q %q", tt.args, pos, *suite, tt.wantPos, tt.wantSuite)
+		}
 	}
 }
