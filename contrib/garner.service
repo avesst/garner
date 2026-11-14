@@ -1,0 +1,44 @@
+# Example systemd unit for garner. Install the binary as
+# /usr/local/bin/garner, the configuration as /etc/garner/garner.yaml,
+# run init once as the service's dynamic user, which prints the admin token:
+#   systemd-run --pty --wait -p DynamicUser=yes -p StateDirectory=garner \
+#     -p ConfigurationDirectory=garner /usr/local/bin/garner init
+# then: systemctl enable --now garner
+# rpm support needs createrepo_c, rpm-sign (rpmsign) and gnupg2 on PATH.
+
+[Unit]
+Description=garner package repository
+Documentation=https://github.com/avesst/garner
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/garner serve --config /etc/garner/garner.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+DynamicUser=yes
+StateDirectory=garner
+ConfigurationDirectory=garner
+# Forge tokens: LoadCredential=forgejo:/etc/garner/forgejo.token, then
+# token_file: /run/credentials/garner.service/forgejo in garner.yaml.
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target
