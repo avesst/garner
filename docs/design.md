@@ -277,11 +277,11 @@ signing:
 
 deb:
   architectures: [amd64, arm64]
-  suites: [stable]
+  suites: [stable, noble]
 
 rpm:
   architectures: [x86_64, aarch64]
-  releases: [stable]
+  releases: [stable, el9]
 
 defaults:
   retention: 3
