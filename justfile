@@ -16,9 +16,14 @@ fmt-check:
 
 vet:
     go vet ./...
+    go vet -tags e2e ./e2e
 
 test:
     go test ./...
+
+# Real apt and dnf clients in containers; needs Docker and network access.
+e2e:
+    go test -tags e2e -count=1 -v ./e2e
 
 # Static binary: no cgo, so it runs on any Linux distribution.
 build:
