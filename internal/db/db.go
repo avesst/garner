@@ -71,6 +71,9 @@ func dsn(path string) string {
 	} {
 		q.Add("_pragma", p)
 	}
+	// Write transactions check, then insert. BEGIN IMMEDIATE takes the
+	// write lock up front, so two of them cannot both pass the check.
+	q.Set("_txlock", "immediate")
 	return "file:" + path + "?" + q.Encode()
 }
 
