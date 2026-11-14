@@ -28,6 +28,9 @@ const (
 	Invalid Kind = iota + 1
 	// Conflict: a content or ownership conflict (HTTP 409).
 	Conflict
+	// NotConfigured: the distribution or architecture is not configured
+	// (HTTP 400 for uploads; sync lists the asset as skipped).
+	NotConfigured
 )
 
 // Error is an ingest failure the caller can report to the uploader.
@@ -40,6 +43,10 @@ func (e *Error) Error() string { return e.Msg }
 
 func invalid(format string, args ...any) error {
 	return &Error{Kind: Invalid, Msg: fmt.Sprintf(format, args...)}
+}
+
+func notConfigured(format string, args ...any) error {
+	return &Error{Kind: NotConfigured, Msg: fmt.Sprintf(format, args...)}
 }
 
 func conflict(format string, args ...any) error {
@@ -122,11 +129,11 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		dist = "stable"
 	}
 	if dists := fm.Distributions(cfg); !slices.Contains(dists, dist) {
-		return nil, invalid("%s distribution %q is not configured; configured: %s",
+		return nil, notConfigured("%s distribution %q is not configured; configured: %s",
 			fm.Name(), dist, strings.Join(dists, ", "))
 	}
 	if archs := fm.Architectures(cfg); parsed.Arch != fm.ArchIndependent() && !slices.Contains(archs, parsed.Arch) {
-		return nil, invalid("%s architecture %q is not configured; configured: %s",
+		return nil, notConfigured("%s architecture %q is not configured; configured: %s",
 			fm.Name(), parsed.Arch, strings.Join(archs, ", "))
 	}
 

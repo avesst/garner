@@ -39,6 +39,9 @@ type SourceStatus struct {
 	LastSuccess string   `json:"last_success,omitempty"`
 	LastError   string   `json:"last_error,omitempty"`
 	Unmatched   []string `json:"repos_without_assets,omitempty"`
+	// Skipped lists assets of the last run whose distribution or
+	// architecture is not configured.
+	Skipped []string `json:"skipped_assets,omitempty"`
 }
 
 // Server serves everything on one handler.

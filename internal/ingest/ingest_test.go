@@ -165,9 +165,9 @@ func TestOwnership(t *testing.T) {
 func TestRejectsUnconfigured(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.upload(t, debtest.Build("app", "1.0", "arm64", "a"), "", "team")
-	wantKind(t, err, Invalid)
+	wantKind(t, err, NotConfigured)
 	_, err = f.upload(t, debtest.Build("app", "1.0", "amd64", "a"), "jammy", "team")
-	wantKind(t, err, Invalid)
+	wantKind(t, err, NotConfigured)
 	_, err = f.upload(t, []byte("not a package"), "", "team")
 	wantKind(t, err, Invalid)
 	if _, err := f.upload(t, debtest.Build("app", "1.0", "all", "a"), "", "team"); err != nil {

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/avesst/garner/internal/auth"
 	"github.com/avesst/garner/internal/format"
@@ -87,7 +86,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &ie):
 		s.uploads.Inc("invalid")
 		body := errorBody{Error: ie.Msg}
-		if strings.Contains(ie.Msg, "distribution") {
+		if ie.Kind == ingest.NotConfigured {
 			body.Configured = configured
 		}
 		writeJSON(w, http.StatusBadRequest, body)
