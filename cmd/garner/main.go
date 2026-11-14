@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+
+	"github.com/avesst/garner/internal/config"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -14,8 +16,9 @@ var version string
 const usage = `Usage: garner <command> [arguments]
 
 Commands:
-  version   Print the version and exit.
-  help      Show this help.
+  config validate [FILE]   Check a configuration file (default ` + config.DefaultPath + `).
+  version                  Print the version and exit.
+  help                     Show this help.
 `
 
 func main() {
@@ -30,6 +33,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "garner", versionString())
 		return 0
@@ -40,6 +45,24 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "garner: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func runConfig(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "validate" || len(args) > 2 {
+		fmt.Fprintf(stderr, "Usage: garner config validate [FILE]\n")
+		return 2
+	}
+	path := config.DefaultPath
+	if len(args) == 2 {
+		path = args[1]
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", path, err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s: valid (sha256 %s)\n", path, cfg.Hash[:12])
+	return 0
 }
 
 // versionString prefers the version set at link time, then the module

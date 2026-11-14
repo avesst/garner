@@ -19,6 +19,9 @@ func TestRun(t *testing.T) {
 		{name: "version flag", args: []string{"--version"}, wantCode: 0, wantStdout: "garner "},
 		{name: "help", args: []string{"help"}, wantCode: 0, wantStdout: "Usage: garner"},
 		{name: "unknown command", args: []string{"frobnicate"}, wantCode: 2, wantStderr: `unknown command "frobnicate"`},
+		{name: "config without subcommand", args: []string{"config"}, wantCode: 2, wantStderr: "Usage: garner config validate"},
+		{name: "valid config", args: []string{"config", "validate", "../../internal/config/testdata/design-example.yaml"}, wantCode: 0, wantStdout: "valid (sha256 "},
+		{name: "missing config", args: []string{"config", "validate", "/nonexistent/garner.yaml"}, wantCode: 1, wantStderr: "no such file"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
