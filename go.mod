@@ -3,6 +3,7 @@ module github.com/avesst/garner
 go 1.26.0
 
 require (
+	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/klauspost/compress v1.20.4
 	github.com/pressly/goose/v3 v3.30.1
 	github.com/ulikunitz/xz v0.5.17
@@ -11,6 +12,7 @@ require (
 )
 
 require (
+	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
@@ -19,6 +21,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	modernc.org/libc v1.80.2 // indirect
