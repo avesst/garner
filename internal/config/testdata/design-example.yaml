@@ -1,0 +1,84 @@
+server:
+  listen: ":8080"
+  public_url: https://repo.example.com
+  client_name: garner
+  trusted_proxies: ["10.0.0.0/8"]
+  allow_insecure_auth: false
+  max_upload_size: 2GiB
+
+metrics:
+  listen: ""                  # empty: serve /metrics on server.listen
+
+log:
+  format: json                # json | text
+  level: info
+
+database:
+  url: sqlite:///var/lib/garner/garner.db
+
+storage:
+  path: /var/lib/garner
+  gc_grace: 10m
+  index_history: 1h           # carry over index files from this window
+
+signing:
+  keys:                       # first key signs; all are published
+    - key_file: /etc/garner/keys/2026.asc
+      passphrase_file: ""
+
+deb:
+  architectures: [amd64, arm64]
+  suites: [stable, noble]
+
+rpm:
+  architectures: [x86_64, aarch64]
+  releases: [stable, el9]
+
+defaults:
+  retention: 3
+  poll_interval: 1h
+  verify: opportunistic       # opportunistic | required
+  approval: auto              # auto | manual
+  prereleases: false
+
+forges:
+  - name: github
+    type: github
+    token_env: GITHUB_TOKEN
+  - name: forgejo-intern
+    type: forgejo              # gitea is an alias
+    url: https://git.example.com
+    token_file: /run/secrets/forgejo
+    ca_file: /etc/ssl/certs/internal-ca.pem
+    max_concurrent: 4
+  - name: gitlab-intern
+    type: gitlab
+    url: https://gitlab.example.com
+    token_file: /run/secrets/gitlab
+    proxy: http://proxy.example.com:3128
+
+sources:
+  - name: tool
+    forge: forgejo-intern
+    repo: platform/tool
+    owns: ["tool", "tool-*"]
+    assets:
+      - match: "*_ubuntu24.04.deb"
+        suite: noble
+      - match: "*.el9.*.rpm"
+        release: el9
+      - match: "*"
+        suite: stable
+        release: stable
+    exclude: ["*-musl*"]
+
+  - name: platform-group
+    forge: gitlab-intern
+    group: platform           # org: for github/forgejo
+    include: ["*"]
+    exclude: ["legacy-*"]
+    archived: false
+    forks: false
+    recursive: true           # GitLab subgroups
+    poll_interval: 30m
+    retention: 5
