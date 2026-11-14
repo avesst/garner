@@ -218,7 +218,9 @@ func (a *App) Reload() error {
 		if err != nil {
 			return fmt.Errorf("signing key: %w", err)
 		}
-		a.keys.Store(keys)
+		if old := a.keys.Swap(keys); old.Fingerprint() != keys.Fingerprint() {
+			go a.resign()
+		}
 		return nil
 	})
 	if err != nil {
@@ -233,6 +235,18 @@ func (a *App) Reload() error {
 	// Suites, architectures, keys and the landing page may have changed.
 	a.Scheduler.Request()
 	return nil
+}
+
+// resign re-signs packages after the signing key changed, then publishes.
+func (a *App) resign() {
+	a.Log.Info("signing key changed; re-signing packages", "fingerprint", a.Signer().Fingerprint())
+	n, err := a.Ingester.Resign(context.Background())
+	if err != nil {
+		a.Log.Error("re-signing failed", "err", err, "done", n)
+	} else {
+		a.Log.Info("re-signed packages", "count", n)
+	}
+	a.Scheduler.Request()
 }
 
 func (a *App) publishAndCollect(ctx context.Context) error {

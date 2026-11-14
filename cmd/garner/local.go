@@ -32,7 +32,9 @@ func runServe(args []string, stderr io.Writer) int {
 		return 2
 	}
 	ctx := context.Background()
-	a, err := app.Open(ctx, *cfgPath, versionString(), extraFormats(stderr)...)
+	var a *app.App
+	signer := func() signing.Signer { return a.Signer() }
+	a, err := app.Open(ctx, *cfgPath, versionString(), extraFormats(signer, stderr)...)
 	if err != nil {
 		fmt.Fprintf(stderr, "garner: %v\n", err)
 		return 1

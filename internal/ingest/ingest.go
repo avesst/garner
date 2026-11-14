@@ -325,3 +325,36 @@ func ref(formatName string, p *format.Parsed) string {
 	}
 	return fmt.Sprintf("%s %s %s %s", formatName, p.Name, v, p.Arch)
 }
+
+// Resign prepares every package that has a served variant again from its
+// original, for example after the signing key changed (section 10). It
+// returns how many packages changed.
+func (in *Ingester) Resign(ctx context.Context) (int, error) {
+	n := 0
+	for _, fm := range in.Formats.All() {
+		pkgs, err := in.Store.SignedPackages(ctx, fm.Name())
+		if err != nil {
+			return n, err
+		}
+		for _, p := range pkgs {
+			signed, err := in.prepare(ctx, fm, p.BlobSHA256)
+			if err != nil {
+				return n, fmt.Errorf("%s %s: %w", fm.Name(), p.Name, err)
+			}
+			if signed == nil || signed.SHA256 == p.SignedSHA256 {
+				continue
+			}
+			err = in.Store.Tx(ctx, func(q *store.Queries) error {
+				if err := q.AddBlob(ctx, signed.SHA256, signed.Size); err != nil {
+					return err
+				}
+				return q.SetSignedBlob(ctx, p.ID, signed.SHA256)
+			})
+			if err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
