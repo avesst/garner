@@ -190,6 +190,14 @@ func Generate(path, name, email string) (fingerprint string, err error) {
 	return generate(path, name, email, config())
 }
 
+// GenerateBits is Generate with another RSA key size; tests use it for
+// speed.
+func GenerateBits(path, name, email string, bits int) (string, error) {
+	cfg := config()
+	cfg.RSABits = bits
+	return generate(path, name, email, cfg)
+}
+
 func generate(path, name, email string, cfg *packet.Config) (string, error) {
 	if _, err := os.Lstat(path); err == nil {
 		return "", fmt.Errorf("%s already exists", path)

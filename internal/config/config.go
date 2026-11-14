@@ -63,6 +63,8 @@ type Storage struct {
 	Path         string        `yaml:"path"`
 	GCGrace      time.Duration `yaml:"gc_grace"`
 	IndexHistory time.Duration `yaml:"index_history"`
+	// SnapshotRetention is how many snapshots are kept, newest first.
+	SnapshotRetention int `yaml:"snapshot_retention"`
 }
 
 type Signing struct {
@@ -193,9 +195,10 @@ func Default() *Config {
 		Log:      Log{Format: "json", Level: "info"},
 		Database: Database{URL: "sqlite:///var/lib/garner/garner.db"},
 		Storage: Storage{
-			Path:         "/var/lib/garner",
-			GCGrace:      10 * time.Minute,
-			IndexHistory: time.Hour,
+			Path:              "/var/lib/garner",
+			GCGrace:           10 * time.Minute,
+			IndexHistory:      time.Hour,
+			SnapshotRetention: 30,
 		},
 		Deb: Deb{Architectures: []string{"amd64"}, Suites: []string{"stable"}},
 		RPM: RPM{Architectures: []string{"x86_64"}, Releases: []string{"stable"}},

@@ -142,6 +142,9 @@ func (c *Config) validateStorage(p *problems) {
 	if c.Storage.IndexHistory < 0 {
 		p.add("storage.index_history", "must not be negative")
 	}
+	if c.Storage.SnapshotRetention < 2 {
+		p.add("storage.snapshot_retention", "must be at least 2, so the previous snapshot survives a publish")
+	}
 }
 
 // SQLitePath returns the database file path from database.url.

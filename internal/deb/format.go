@@ -189,7 +189,7 @@ func (Format) Render(ctx context.Context, r *format.RenderRequest) error {
 				return err
 			}
 		}
-		if err := carryHistory(r.History, suite, c.Deb.Architectures, suiteDir); err != nil {
+		if err := carryHistory(r.History, suite, suiteDir); err != nil {
 			return err
 		}
 		release := releaseFile(c, suite, now, files)
@@ -214,29 +214,50 @@ func (Format) Render(ctx context.Context, r *format.RenderRequest) error {
 	return os.Symlink("../../../pool/deb", filepath.Join(r.Dir, "pool"))
 }
 
-// carryHistory hardlinks the by-hash files of earlier snapshots into this
-// one, so a client holding an older InRelease can still fetch the indexes
-// it lists (section 9, step 4).
-func carryHistory(history []string, suite string, archs []string, suiteDir string) error {
+// carryHistory hardlinks into this snapshot the index files that earlier
+// snapshots listed in their own Release, so a client holding an older
+// InRelease can still fetch them by hash (section 9, step 4). Files those
+// snapshots carried themselves are not carried again, so history ends
+// when a snapshot leaves the window.
+func carryHistory(history []string, suite string, suiteDir string) error {
 	for _, old := range history {
-		for _, arch := range archs {
-			rel := filepath.Join("main", "binary-"+arch, "by-hash", "SHA256")
-			entries, err := os.ReadDir(filepath.Join(old, "dists", suite, rel))
-			if os.IsNotExist(err) {
+		oldSuite := filepath.Join(old, "dists", suite)
+		release, err := os.ReadFile(filepath.Join(oldSuite, "Release"))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, f := range releaseSHA256(release) {
+			rel := filepath.Join(filepath.Dir(filepath.FromSlash(f.path)), "by-hash", "SHA256", f.sha256)
+			src := filepath.Join(oldSuite, rel)
+			if _, err := os.Stat(src); err != nil {
 				continue
 			}
-			if err != nil {
+			if err := fsutil.LinkOrCopy(src, filepath.Join(suiteDir, rel)); err != nil {
 				return err
-			}
-			for _, e := range entries {
-				src := filepath.Join(old, "dists", suite, rel, e.Name())
-				if err := fsutil.LinkOrCopy(src, filepath.Join(suiteDir, rel, e.Name())); err != nil {
-					return err
-				}
 			}
 		}
 	}
 	return nil
+}
+
+// releaseSHA256 returns the entries of a Release file's SHA256 field.
+func releaseSHA256(release []byte) []indexFile {
+	p, err := ParseParagraph(release)
+	if err != nil {
+		return nil
+	}
+	v, _ := p.Get("SHA256")
+	var out []indexFile
+	for _, line := range strings.Split(v, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 3 && !strings.Contains(f[2], "..") {
+			out = append(out, indexFile{path: f[2], sha256: f[0]})
+		}
+	}
+	return out
 }
 
 // packageFields are computed by garner; values from the control file are
