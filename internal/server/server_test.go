@@ -27,6 +27,13 @@ import (
 	"github.com/avesst/garner/internal/store"
 )
 
+// noSources is a syncer without configured sources; like the real one, it
+// reports them as a nil slice.
+type noSources struct{}
+
+func (noSources) Trigger(string) error                  { return nil }
+func (noSources) Status(context.Context) []SourceStatus { return nil }
+
 type fixture struct {
 	cfg     *config.Config
 	h       http.Handler
@@ -60,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 	sched := &publish.Scheduler{}
 	s := &Server{
 		Store: f.st, Formats: reg, Config: conf, Metrics: metrics.NewRegistry(), Root: root, Log: log,
-		Scheduler: sched,
+		Scheduler: sched, Syncer: noSources{},
 		Ingester: &ingest.Ingester{Store: f.st, Blobs: blobs, Formats: reg, Config: conf, TmpDir: root,
 			Publish: sched.Request, Log: log},
 		Publisher: &publish.Publisher{Store: f.st, Blobs: blobs, Formats: reg, Config: conf,
@@ -192,6 +199,9 @@ func TestPublishRemoveAndRead(t *testing.T) {
 	var st Status
 	if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil || st.CurrentSnapshot == "" {
 		t.Errorf("status: %v %s", err, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), `"sources": []`) {
+		t.Errorf("status without sources should list [] , got:\n%s", w.Body)
 	}
 	if w := f.do(http.MethodGet, "/api/v1/nope", "", nil, ""); w.Code != http.StatusNotFound {
 		t.Errorf("unknown API path: HTTP %d", w.Code)

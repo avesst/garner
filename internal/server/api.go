@@ -136,7 +136,9 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 		st.CurrentSnapshot, st.PublishedAt = cur.ID, cur.CreatedAt
 	}
 	if s.Syncer != nil {
-		st.Sources = s.Syncer.Status(ctx)
+		if src := s.Syncer.Status(ctx); src != nil {
+			st.Sources = src
+		}
 	}
 	cs, err := s.Store.Conflicts(ctx, false)
 	if err != nil {
