@@ -53,7 +53,7 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) upload(t *testing.T, data []byte, dist, owner string) (*Result, error) {
 	t.Helper()
 	return f.in.Ingest(context.Background(), bytes.NewReader(data), Request{
-		Distribution: dist, Owner: owner, Origin: "upload", OriginRef: "test", VerifyStatus: "n/a",
+		Targets: map[string]string{"suite": dist}, Owner: owner, Origin: "upload", OriginRef: "test", VerifyStatus: "n/a",
 	})
 }
 

@@ -62,8 +62,10 @@ type Ingester struct {
 
 // Request describes one delivery.
 type Request struct {
-	// Distribution is the deb suite or rpm release; "" means "stable".
-	Distribution string
+	// Targets maps a format's DistributionKey to the distribution to
+	// place the package in ("suite": "noble"). A missing or empty entry
+	// means "stable".
+	Targets map[string]string
 	// Owner is the delivering identity: a token's owner label or
 	// "source:<name>".
 	Owner        string
@@ -115,7 +117,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		return nil, invalid("%s: %v", fm.Name(), err)
 	}
 
-	dist := req.Distribution
+	dist := req.Targets[fm.DistributionKey()]
 	if dist == "" {
 		dist = "stable"
 	}

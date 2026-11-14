@@ -103,6 +103,9 @@ type Format interface {
 	Parse(f *os.File) (*Parsed, error)
 	// Compare orders two versions of one package name and architecture.
 	Compare(a, b *Package) int
+	// DistributionKey names this format's distribution in requests and
+	// asset rules ("suite", "release").
+	DistributionKey() string
 	// Distributions and Architectures are the configured ones.
 	Distributions(c *config.Config) []string
 	Architectures(c *config.Config) []string
