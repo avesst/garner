@@ -88,12 +88,19 @@ func storeListener(name string, l net.Listener) error {
 	if !ok {
 		return fmt.Errorf("%T is not a TCP listener", l)
 	}
-	f, err := tl.File() // a duplicate; systemd duplicates it again
+	// Not tl.File().Fd(): Fd switches the descriptor to blocking mode, and
+	// the duplicate shares that flag with the listener. A blocking accept
+	// is not woken by Close, so shutdown would hang until the next
+	// connection arrived.
+	rc, err := tl.SyscallConn()
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return Store(name, int(f.Fd()))
+	var serr error
+	if err := rc.Control(func(fd uintptr) { serr = Store(name, int(fd)) }); err != nil {
+		return err
+	}
+	return serr
 }
 
 // sameAddr reports whether a bound address is what addr asks for. An

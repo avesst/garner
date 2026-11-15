@@ -65,6 +65,34 @@ func TestNotifyAndStore(t *testing.T) {
 	}
 }
 
+// Storing a listener must leave it non-blocking: a blocking accept is not
+// woken by Close, so shutdown would hang until the next connection
+// arrived (the socket stays open in systemd's store).
+func TestStoredListenerCloseStopsAccept(t *testing.T) {
+	fakeSystemd(t)
+	l, err := Listen("http", "127.0.0.1:0", nil, discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.Accept()
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	addr := l.Addr().String()
+	go l.Close() // with a blocking socket, Close waits for the accept
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// A connection releases the blocked accept, as one did in production.
+		if c, err := net.Dial("tcp", addr); err == nil {
+			c.Close()
+		}
+		t.Fatal("Accept still blocked after Close")
+	}
+}
+
 func TestListenReusesMatchingAndDropsStale(t *testing.T) {
 	c := fakeSystemd(t)
 	old, err := net.Listen("tcp", "127.0.0.1:0")
