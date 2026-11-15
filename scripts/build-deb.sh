@@ -33,7 +33,8 @@ stage=$(mktemp -d)
 chmod 0755 "$stage" # mktemp makes it 0700; it becomes the "./" entry
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/DEBIAN" "$stage/etc/garner" "$stage/usr/bin" "$stage/usr/lib/systemd/system" \
-	"$stage/usr/lib/sysusers.d" "$stage/usr/lib/tmpfiles.d" "$stage/usr/share/doc/garner"
+	"$stage/usr/lib/sysusers.d" "$stage/usr/lib/tmpfiles.d" "$stage/usr/share/doc/garner" \
+	"$stage/usr/share/man/man1" "$stage/usr/share/man/man5"
 
 CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -C "$root" -trimpath \
 	-ldflags "-s -w -X main.version=$version" -o "$stage/usr/bin/garner" ./cmd/garner
@@ -56,6 +57,10 @@ cp "$root/contrib/garner.yaml" "$stage/etc/garner/garner.yaml"
 echo /etc/garner/garner.yaml > "$stage/DEBIAN/conffiles"
 cp "$root/docs/design.md" "$stage/usr/share/doc/garner/design.md"
 gzip -9n "$stage/usr/share/doc/garner/design.md"
+cp "$root/docs/garner.1" "$stage/usr/share/man/man1/garner.1"
+gzip -9n "$stage/usr/share/man/man1/garner.1"
+cp "$root/docs/garner.yaml.5" "$stage/usr/share/man/man5/garner.yaml.5"
+gzip -9n "$stage/usr/share/man/man5/garner.yaml.5"
 
 cat > "$stage/DEBIAN/control" <<CONTROL
 Package: garner

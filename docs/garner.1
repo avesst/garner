@@ -1,0 +1,211 @@
+.TH GARNER 1 "" "garner" "User Commands"
+.SH NAME
+garner \- internal deb and rpm package repository
+.SH SYNOPSIS
+.B garner
+.I command
+.RI [ arguments ]
+.SH DESCRIPTION
+.B garner
+serves signed apt and dnf repositories from uploaded packages and from
+releases synced from GitHub, GitLab and Forgejo/Gitea.
+.PP
+Local commands run on the host that holds the configuration and the
+database.
+API commands talk to a running server over HTTP and can run anywhere.
+Flags may appear before or after positional arguments;
+.B \-\-
+ends flag parsing.
+.SH LOCAL COMMANDS
+.TP
+.B serve \fR[\fB\-\-config \fIFILE\fR]
+Run the server.
+.B SIGHUP
+reloads the configuration;
+.B SIGTERM
+and
+.B SIGINT
+stop it.
+Under systemd it reports readiness through
+.B \%NOTIFY_SOCKET
+and accepts listening sockets passed with
+.BR \%LISTEN_FDS .
+.TP
+.B init \fR[\fB\-\-config \fIFILE\fR]
+Create the storage directory, the database, a signing key when
+.B signing.keys
+is empty, and an admin token.
+The token is printed once.
+Running it again keeps an existing key, and creates no token when any
+token exists.
+.TP
+.BR "config validate" " [\fIFILE\fR]"
+Check a configuration file and print its hash.
+Works offline and does not open files that
+.B *_file
+keys point to.
+.TP
+.B token create \-\-name \fIN\fB \-\-owner \fIO\fB \-\-scope \fIS\fR[,\fIS\fR...]
+.TQ
+.B token list
+.TQ
+.B token revoke \fINAME\fR
+Manage API tokens.
+Scopes are
+.BR upload ,
+.B publish
+and
+.BR admin .
+By default these open the database directly, which fails while
+.B garner serve
+runs; with
+.B \-\-url
+they go through the API and need an
+.B admin
+token.
+.SH API COMMANDS
+The server is taken from
+.BR \-\-url ,
+then
+.BR GARNER_URL ,
+then
+.BR \%http://localhost:8080 .
+Commands that change state need a token in
+.B \%GARNER_TOKEN
+with the scope listed.
+Listing commands accept
+.B \-\-json
+to print the raw response.
+.TP
+.B upload \fR[\fB\-\-suite \fIS\fR] [\fB\-\-release \fIR\fR] \fIFILES\fR...
+Upload .deb or .rpm files into a deb suite or rpm release.
+Scope:
+.BR upload .
+.TP
+.B remove \fINAME\fR \fR[\fB\-\-version \fIV\fR] [\fB\-\-arch \fIA\fR] [\fB\-\-distribution \fID\fR]
+Remove the matching versions of a package.
+Scope:
+.BR admin .
+.TP
+.B owner list
+.TQ
+.B owner set \fINAME OWNER\fR
+Show or change which owner may upload a package name.
+.B set
+needs scope
+.BR admin .
+.TP
+.B sync \fISOURCE\fR
+Start a sync of a configured source; follow it with
+.BR "garner status" .
+Scope:
+.BR publish .
+.TP
+.B approve \fIPACKAGE_ID\fR
+Release a held package.
+Scope:
+.BR publish .
+.TP
+.BR "conflicts list" " [" \-\-all ]
+Show open conflicts, or all with
+.BR \-\-all .
+Scope:
+.BR publish .
+.TP
+.B packages list \fR[\fB\-\-name \fIN\fR] [\fB\-\-distribution \fID\fR] [\fB\-\-all\fR]
+List packages; removed ones only with
+.BR \-\-all .
+.TP
+.B snapshot list
+.TQ
+.B snapshot rollback \fIID\fR
+List published snapshots, or publish a new snapshot with the packages of
+.IR ID .
+.B rollback
+needs scope
+.BR publish .
+.TP
+.B publish
+Publish a new snapshot.
+Scope:
+.BR publish .
+.TP
+.B gc
+Delete package files and snapshots that are no longer referenced.
+Scope:
+.BR admin .
+.TP
+.B reload
+Reload the server's configuration, like
+.BR SIGHUP .
+Scope:
+.BR admin .
+.TP
+.B status
+Show the version, configuration, current snapshot, open conflicts, held
+packages and the state of each source.
+.SH OTHER COMMANDS
+.TP
+.BR version ", " \-\-version
+Print the version.
+.TP
+.BR help ", " \-h ", " \-\-help
+Print a usage summary.
+.SH ENVIRONMENT
+.TP
+.B GARNER_URL
+Server URL for API commands and
+.BR "token \-\-url" .
+.TP
+.B \%GARNER_TOKEN
+API token as
+.IB NAME : SECRET\fR,
+as printed by
+.B garner init
+and
+.BR "garner token create" .
+.SH FILES
+.TP
+.I /etc/garner/garner.yaml
+Default configuration file; see
+.BR garner.yaml (5).
+.TP
+.I /var/lib/garner
+Default storage directory and SQLite database.
+.TP
+.I /usr/share/doc/garner/design.md.gz
+Design document.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or at least one file of an upload failed.
+.TP
+.B 2
+Usage error.
+.SH EXAMPLES
+First start of a packaged install:
+.PP
+.RS
+.nf
+sudo -u garner garner init
+systemctl enable \-\-now garner
+.fi
+.RE
+.PP
+Upload a package from CI:
+.PP
+.RS
+.nf
+export GARNER_URL=https://pkg.example.com
+export GARNER_TOKEN=ci:...
+garner upload \-\-suite stable dist/*.deb
+.fi
+.RE
+.SH SEE ALSO
+.BR garner.yaml (5),
+.BR apt (8),
+.BR dnf (8),
+.BR systemctl (1)

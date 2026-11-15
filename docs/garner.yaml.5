@@ -1,0 +1,590 @@
+.TH GARNER.YAML 5 "" "garner" "File Formats"
+.SH NAME
+garner.yaml \- garner configuration file
+.SH SYNOPSIS
+.I /etc/garner/garner.yaml
+.SH DESCRIPTION
+.BR garner (1)
+reads one YAML file.
+It holds the decisions you make: what to serve, where to sync from and
+how to sign.
+Everything garner learns while running (packages, tokens, owners,
+snapshots) lives in the database instead.
+.PP
+The default path is
+.IR /etc/garner/garner.yaml ;
+.B \-\-config
+overrides it.
+.B garner config validate
+.RI [ FILE ]
+checks a file.
+It works offline and never opens the files that
+.B *_file
+keys point to, so it can run in CI.
+.PP
+.B SIGHUP
+or
+.B garner reload
+reloads a running server.
+An invalid file is rejected and logged, and the last good configuration
+stays active.
+See
+.B CHANGES THAT NEED A RESTART
+for the exceptions.
+.PP
+Unknown keys are errors, so a misspelled key fails validation instead of
+being ignored.
+The file must hold exactly one YAML document.
+Validation reports every problem at once, each prefixed with its key path,
+for example
+.BR "sources[2].assets[0].suite: unknown suite \(dqnoble\(dq" .
+.PP
+Secrets are never written inline.
+Point to them with a
+.B *_file
+or a
+.B *_env
+key.
+.PP
+Every key is optional unless marked
+.BR required .
+A key you leave out keeps its default.
+.SH VALUE FORMATS
+.TP
+.I duration
+A number with a unit:
+.BR s ,
+.BR m ,
+.BR h .
+There is no unit for days.
+Examples:
+.BR 30m ,
+.BR 1h30m ,
+.BR 168h .
+.TP
+.I size
+Bytes, or a number with a unit:
+.BR KB ", " MB ", " GB ", " TB
+(powers of 1000) or
+.BR KiB ", " MiB ", " GiB ", " TiB
+(powers of 1024).
+Examples:
+.BR 2GiB ,
+.BR 500MB ,
+.BR 1048576 .
+.TP
+.I glob
+.B *
+matches any run of characters,
+.B ?
+one character,
+.B [...]
+a character class
+.RB ( [^...]
+negates it), and
+.B \e
+escapes the next character.
+Examples:
+.BR tool\-* ,
+.BR *_amd64.deb .
+.TP
+.I listen address
+.IB host : port
+or
+.BI : port\fR.
+Examples:
+.BR :8080 ,
+.BR 127.0.0.1:9090 .
+.SH SERVER
+.TP
+.BR listen " (\fIlisten address\fR, default " :8080 )
+Where the HTTP server listens.
+Changing it needs a restart.
+.TP
+.BR public_url " (\fIURL\fR, " required )
+The URL apt and dnf clients use.
+It goes into the client files and the landing page.
+Must be an absolute
+.B http
+or
+.B https
+URL without a query or fragment.
+A path is allowed, for example
+.BR \%https://example.com/garner/ .
+.TP
+.BR client_name " (\fIname\fR, default " garner )
+Prefix of the files clients install:
+.IB name .sources\fR,
+.IB name .repo\fR,
+.I /usr/share/keyrings/\fIname\fP.gpg\fR,
+and the dnf repo ID.
+Lowercase letters, digits,
+.BR . ,
+.B _
+and
+.BR \- ;
+must start with a letter or digit.
+.TP
+.BR trusted_proxies " (\fIlist of IPs or CIDR prefixes\fR, default " [] )
+Reverse proxies whose
+.B X\-Forwarded\-*
+headers are honoured.
+Authenticated requests are accepted only from loopback, or from one of
+these with
+.BR "X\-Forwarded\-Proto: https" .
+Others get 403.
+.TP
+.BR allow_insecure_auth " (\fIbool\fR, default " false )
+Accept authenticated requests over plain HTTP from any address.
+Tokens then travel unencrypted, so use this only on an isolated lab
+network.
+.TP
+.BR max_upload_size " (\fIsize\fR, default " 2GiB )
+Largest package accepted by the upload API.
+Must be greater than zero.
+.SH METRICS
+.TP
+.BR listen " (\fIlisten address\fR, default empty)"
+Serve
+.B /metrics
+on a separate address.
+When empty,
+.B /metrics
+is served on
+.BR server.listen .
+Changing it needs a restart.
+.SH LOG
+.TP
+.BR format " (" json " or " text ", default " json )
+Log line format.
+.TP
+.BR level " (" debug ", " info ", " warn " or " error ", default " info )
+Lowest level that is logged.
+.SH DATABASE
+.TP
+.BR url " (\fIURL\fR, default " \%sqlite:///var/lib/garner/garner.db )
+The database.
+Only SQLite is supported:
+.B sqlite://
+followed by an absolute path, so three slashes in total.
+Keep the file on local disk, never on NFS.
+Changing it needs a restart.
+.SH STORAGE
+.TP
+.BR path " (\fIabsolute path\fR, default " /var/lib/garner )
+Root of package blobs, snapshots and
+.IR public/ ,
+the directory clients are served from.
+Changing it needs a restart.
+.TP
+.BR gc_grace " (\fIduration\fR, default " 10m )
+How long a replaced snapshot is kept before deletion, so requests already
+resolved through it can finish.
+Must not be negative.
+.TP
+.BR index_history " (\fIduration\fR, default " 1h )
+Index files of every snapshot published within this window are carried
+into each new snapshot, so a client that fetched the signed top-level file
+just before a publish can still fetch the indexes it lists.
+The previous snapshot's index files are always carried over.
+Must not be negative.
+.TP
+.BR snapshot_retention " (\fIinteger\fR, default " 30 )
+How many snapshots are kept, newest first.
+The current snapshot is always kept.
+Must be at least 2.
+.SH SIGNING
+.TP
+.BR keys " (\fIlist of keys\fR, default " [] )
+OpenPGP keys.
+All of them are published in
+.B /key.asc
+and
+.BR /key.gpg ;
+the first one signs.
+When the list is empty,
+.B garner init
+generates an RSA 4096 key at
+.I <storage.path>/signing/key.asc
+and garner uses it.
+.PP
+Each entry of
+.BR keys :
+.TP
+.BR key_file " (\fIpath\fR, " required )
+Armored private key.
+.TP
+.BR passphrase_file " (\fIpath\fR, default empty)"
+File holding the key's passphrase.
+Leave it empty for a key without a passphrase, which is the default for
+unattended signing.
+.PP
+To rotate keys: add the new key second, wait for clients to fetch the
+keyring, move the new key first, then remove the old key.
+Promoting a new key re\-signs every rpm package from its original.
+.SH DEB
+.TP
+.BR architectures " (\fIlist\fR, default " [amd64] )
+Debian architectures to publish.
+Lowercase letters, digits and
+.BR \- .
+Don't list
+.BR all :
+architecture\-independent packages are published under every listed
+architecture automatically.
+.TP
+.BR suites " (\fIlist\fR, default " [stable] )
+Suites to publish.
+Letters, digits,
+.BR . ,
+.B _
+and
+.BR \- .
+The first suite, or
+.B stable
+if listed, is the default: its client file is served at the root and the
+others below
+.IR clients/<suite>/ .
+.SH RPM
+rpm support also needs
+.BR createrepo_c ,
+.BR rpmsign ,
+.B gpg
+and
+.B gpgconf
+on
+.BR PATH .
+Without them
+.B serve
+disables rpm and logs which tools are missing.
+.TP
+.BR architectures " (\fIlist\fR, default " [x86_64] )
+rpm architectures to publish.
+Lowercase letters, digits and
+.BR _ .
+Don't list
+.BR noarch ;
+it is implicit, as
+.B all
+is for deb.
+.TP
+.BR releases " (\fIlist\fR, default " [stable] )
+Releases to publish.
+Same rules and default handling as
+.BR deb.suites .
+.SH DEFAULTS
+Settings for every source that does not override them.
+.B retention
+also applies to uploaded packages.
+.TP
+.BR retention " (\fIinteger\fR, default " 3 )
+Versions kept per package name, distribution and architecture.
+Older versions leave future snapshots; pinned packages are always kept.
+Must be at least 1.
+.TP
+.BR poll_interval " (\fIduration\fR, default " 1h )
+How often a source is polled, with \(+-10% jitter.
+Must be at least
+.BR 1m .
+.TP
+.BR verify " (" opportunistic " or " required ", default " opportunistic )
+Checksum policy.
+An asset is checked against the forge's digest or the release's checksum
+file when one exists, and a mismatch always rejects it.
+.B opportunistic
+accepts assets without a checksum and marks them unverified.
+.B required
+rejects them.
+.TP
+.BR approval " (" auto " or " manual ", default " auto )
+With
+.BR manual ,
+new packages are stored as held and published only after
+.BR "garner approve" .
+.TP
+.BR prereleases " (\fIbool\fR, default " false )
+Sync pre\-releases too.
+Drafts are never synced.
+.SH FORGES
+A list of forges that sources sync from.
+There are none by default.
+.TP
+.BR name " (\fIname\fR, " required )
+Name that sources refer to.
+Lowercase letters, digits,
+.B _
+and
+.BR \- ;
+must start with a letter or digit; unique.
+.TP
+.BR type " (" required )
+.BR github ,
+.BR forgejo ,
+.B gitea
+(an alias of
+.BR forgejo )
+or
+.BR gitlab .
+.TP
+.BR url " (\fIhttps URL\fR, default empty)"
+The forge's base URL.
+Required except for
+.BR github ,
+where empty means github.com; set it to use GitHub Enterprise Server.
+Must be
+.BR https ,
+because tokens are sent to it.
+.TP
+.BR token_env " (\fIvariable name\fR, default empty)"
+Environment variable holding the API token.
+.TP
+.BR token_file " (\fIpath\fR, default empty)"
+File holding the API token; surrounding whitespace is trimmed.
+Set
+.B token_env
+or
+.BR token_file ,
+not both.
+With neither, requests are unauthenticated.
+.TP
+.BR ca_file " (\fIpath\fR, default empty)"
+PEM file with the CA certificates that sign the forge's TLS certificate.
+TLS verification can't be turned off.
+.TP
+.BR max_concurrent " (\fIinteger\fR, default " 4 )
+Most requests in flight to this forge at once.
+Must be at least 1.
+.TP
+.BR proxy " (\fIURL\fR, default empty)"
+Proxy for this forge's requests: an
+.BR http ,
+.B https
+or
+.B socks5
+URL.
+When empty,
+.B HTTPS_PROXY
+and
+.B NO_PROXY
+from the environment apply.
+.PP
+The token is sent only to the forge's own scheme, host and port.
+Asset links that point elsewhere are fetched without it.
+.SH SOURCES
+A list of places to sync releases from.
+There are none by default.
+A source is one repository
+.RB ( repo ),
+a GitHub or Forgejo organization
+.RB ( org ),
+or a GitLab group
+.RB ( group ).
+Set exactly one of the three.
+.TP
+.BR name " (\fIname\fR, " required )
+Unique name, used in logs, metrics, status and
+.BI "garner sync " name\fR.
+Same rules as forge names.
+.TP
+.BR forge " (\fIforge name\fR, " required )
+The
+.B forges[].name
+to sync from.
+.TP
+.BR repo " (\fIowner\fB/\fIname\fR, default empty)"
+A single repository.
+GitLab paths may have more parts
+.RI ( group/sub/project ).
+.TP
+.BR org " (\fIname\fR, default empty)"
+A GitHub or Forgejo organization; every repository in it is synced.
+New repositories are picked up on the next poll.
+.TP
+.BR group " (\fIpath\fR, default empty)"
+A GitLab group, synced like
+.BR org .
+.TP
+.BR owns " (\fIlist of globs\fR, default " [] )
+Package names this source reserves.
+Only this source may deliver them, also against uploads.
+Globs of two sources must not be able to match the same name; validation
+names an example if they do.
+.TP
+.BR assets " (\fIlist of rules\fR, default " [] )
+Which deb suite or rpm release each asset goes to; see
+.BR "ASSET RULES" .
+.TP
+.BR include " (\fIlist of globs\fR, default " [] )
+For
+.B org
+and
+.B group
+sources only: sync only repositories whose name (without the owner)
+matches one of these.
+Empty means all.
+.TP
+.BR exclude " (\fIlist of globs\fR, default " [] )
+Skip repositories whose name matches, and skip assets whose file name
+matches.
+Matching assets are never downloaded.
+.TP
+.BR checksums " (\fIlist of globs\fR, default " [] )
+File names of a release's checksum files.
+They replace the built\-in names
+.RB ( checksums.txt ,
+.BR *_checksums.txt ,
+.BR SHA256SUMS ,
+.BR *.sha256 ).
+.TP
+.BR archived " (\fIbool\fR, default " false )
+Also sync archived repositories of an
+.B org
+or
+.BR group .
+.TP
+.BR forks " (\fIbool\fR, default " false )
+Also sync forks in an
+.B org
+or
+.BR group .
+.TP
+.BR recursive " (\fIbool\fR, default " true )
+Walk GitLab subgroups.
+Only valid on GitLab
+.B group
+sources.
+.PP
+A source can also set
+.BR retention ,
+.BR poll_interval ,
+.BR verify ,
+.B approval
+and
+.BR prereleases ,
+which override
+.B defaults
+for that source only.
+The same rules apply.
+.PP
+Some asset names are always skipped:
+.BR *.src.rpm ,
+.B \%*\-dbgsym*
+and
+.BR \%*\-debuginfo* ,
+and files without a
+.B .deb
+or
+.B .rpm
+extension (or
+.B .rpm
+when rpm is disabled).
+.PP
+On its first run, a source syncs only the latest release of each
+repository.
+Later runs pick up every release published since then.
+.SS ASSET RULES
+Each entry of
+.BR assets :
+.TP
+.BR match " (\fIglob\fR, " required )
+Asset file names this rule applies to.
+.TP
+.BR suite " (\fIsuite name\fR, default empty)"
+Target for
+.B .deb
+assets.
+Must be listed in
+.BR deb.suites .
+.TP
+.BR release " (\fIrelease name\fR, default empty)"
+Target for
+.B .rpm
+assets.
+Must be listed in
+.BR rpm.releases .
+.PP
+Set
+.BR suite ,
+.B release
+or both.
+Rules are evaluated in order.
+The first rule whose
+.B match
+fits the asset name and that sets a target for the asset's format wins, so
+a
+.B *
+rule with only
+.B suite
+does not catch rpm assets.
+.IP \(bu 2
+With no rules at all, every asset goes to
+.BR stable .
+.IP \(bu 2
+With rules, an asset that no rule places is skipped and not downloaded.
+.IP \(bu 2
+If two assets of one release end up as the same package, version,
+architecture and distribution, both are skipped and a conflict is
+recorded.
+.SH CHANGES THAT NEED A RESTART
+A reload applies everything except these keys.
+Changing them makes the reload fail with a message naming the keys, and
+the running configuration stays active until you restart:
+.BR server.listen ,
+.BR metrics.listen ,
+.BR database.url ,
+.BR storage.path .
+.PP
+A reload restarts only the sources whose effective settings changed,
+including inherited defaults and their forge's settings.
+The others keep their schedule.
+.SH EXAMPLE
+A small setup: one internal Forgejo, one repository with separate Ubuntu
+and EL9 builds, and a whole organization synced to
+.BR stable .
+.PP
+.RS
+.nf
+server:
+  public_url: https://packages.example.com
+  trusted_proxies: ["10.0.0.5"]
+
+storage:
+  path: /var/lib/garner
+
+deb:
+  architectures: [amd64, arm64]
+  suites: [stable, noble]
+
+rpm:
+  architectures: [x86_64]
+  releases: [stable, el9]
+
+forges:
+  \- name: forgejo
+    type: forgejo
+    url: https://git.example.com
+    token_file: /run/credentials/garner.service/forgejo\-token
+
+sources:
+  \- name: tool
+    forge: forgejo
+    repo: platform/tool
+    owns: ["tool", "tool\-*"]
+    assets:
+      \- match: "*_ubuntu24.04*.deb"
+        suite: noble
+      \- match: "*.el9.*.rpm"
+        release: el9
+      \- match: "*"
+        suite: stable
+        release: stable
+
+  \- name: platform
+    forge: forgejo
+    org: platform
+    exclude: ["legacy\-*", "*\-musl*"]
+    approval: manual
+.fi
+.RE
+.SH SEE ALSO
+.BR garner (1)
