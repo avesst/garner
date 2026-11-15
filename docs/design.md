@@ -473,8 +473,13 @@ not trusted.
 
 **Asset selection.**
 
-- Candidates: `*.deb` and `*.rpm`, excluding `*.src.rpm`, `*-dbgsym*`,
-  `*-debuginfo*`, plus the source's `exclude` list.
+- Candidates: assets with the extension of an enabled format (`*.deb`,
+  and `*.rpm` when rpm support is enabled), excluding `*.src.rpm`,
+  `*-dbgsym*`, `*-debuginfo*`, plus the source's `exclude` list. With asset
+  rules, an asset whose name matches no rule is not a candidate either.
+  These checks use the name only, so other assets are never downloaded.
+  The architecture is read from the package, after download; `exclude`
+  keeps unwanted architectures from being downloaded at all.
 - `assets` rules are evaluated in order; the first rule that matches the
   asset name and sets a target for the asset's format wins: `suite` for deb,
   `release` for rpm. A `*` rule with only `suite` therefore does not

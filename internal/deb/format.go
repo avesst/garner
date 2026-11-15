@@ -33,6 +33,7 @@ func (Format) Name() string            { return "deb" }
 func (Format) Namespace() string       { return "os" }
 func (Format) ArchIndependent() string { return "all" }
 func (Format) DistributionKey() string { return "suite" }
+func (Format) Extensions() []string    { return []string{".deb"} }
 
 func (Format) Detect(head []byte) bool {
 	return bytes.HasPrefix(head, []byte("!<arch>\ndebian-binary"))

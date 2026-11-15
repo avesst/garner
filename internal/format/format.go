@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/signing"
@@ -98,6 +99,9 @@ type Format interface {
 	// Namespace is the ownership namespace (section 17); deb and rpm share
 	// "os".
 	Namespace() string
+	// Extensions are the file name suffixes of this format's packages
+	// (".deb"). Sync only downloads release assets with one of them.
+	Extensions() []string
 	// Detect reports whether a file starting with head is in this format.
 	Detect(head []byte) bool
 	Parse(f *os.File) (*Parsed, error)
@@ -152,6 +156,19 @@ func (r *Registry) Get(name string) (Format, bool) {
 		}
 	}
 	return nil, false
+}
+
+// HandlesName reports whether an enabled format uses the file name's
+// extension, so a disabled format's files are never downloaded.
+func (r *Registry) HandlesName(name string) bool {
+	for _, f := range r.formats {
+		for _, ext := range f.Extensions() {
+			if strings.HasSuffix(name, ext) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Detect returns the format of the file, reading its first bytes.

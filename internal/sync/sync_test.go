@@ -34,9 +34,10 @@ type fakeForge struct {
 	files    map[string][]byte // asset URL -> body
 	fail     map[string]bool   // asset URL -> download fails
 
-	mu    gosync.Mutex
-	calls map[string]int           // repo -> Releases calls
-	block map[string]chan struct{} // repo -> Releases waits for close
+	mu        gosync.Mutex
+	calls     map[string]int           // repo -> Releases calls
+	downloads []string                 // asset names, in order
+	block     map[string]chan struct{} // repo -> Releases waits for close
 }
 
 func (f *fakeForge) count(repo string) int {
@@ -68,6 +69,9 @@ func (f *fakeForge) Releases(ctx context.Context, repo string, _ time.Time, _ st
 	return f.releases[repo], "", nil
 }
 func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, error) {
+	f.mu.Lock()
+	f.downloads = append(f.downloads, a.Name)
+	f.mu.Unlock()
 	if f.fail[a.URL] {
 		return nil, errors.New("connection reset")
 	}
@@ -481,5 +485,29 @@ func TestSourceChecksumGlobs(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %s", want, got)
 		}
+	}
+}
+
+// Assets that cannot become packages are not downloaded: no enabled
+// format for their extension (rpm is not registered in the fixture), or
+// no asset rule matching their name. They do not fail the run either.
+func TestSkipsBeforeDownload(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool", Assets: []config.AssetRule{
+		{Match: "*-amd64.deb", Suite: "stable"},
+		{Match: "*.rpm", Release: "stable"},
+	}})
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool-1.0-amd64.deb", debtest.Build("tool", "1.0", "amd64", "a"))
+	f.forge.add(rel, "tool-1.0-arm64.deb", debtest.Build("tool", "1.0", "arm64", "b"))
+	f.forge.add(rel, "tool-1.0-x86_64.rpm", []byte("not read"))
+	f.forge.add(rel, "tool.flatpak", []byte("not read"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	if got := strings.Join(f.forge.downloads, ","); got != "tool-1.0-amd64.deb" {
+		t.Errorf("downloaded %q, want only tool-1.0-amd64.deb", got)
+	}
+	if got := strings.Join(f.placed(), "; "); got != "tool 1.0 stable active unverified" {
+		t.Errorf("placed %q", got)
 	}
 }

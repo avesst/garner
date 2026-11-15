@@ -481,7 +481,7 @@ type asset struct {
 func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (matched, transient bool, err error) {
 	var cands []forge.Asset
 	for _, a := range rel.Assets {
-		if isCandidate(a.Name) && !matchAny(r.src.Exclude, a.Name) {
+		if r.isCandidate(a.Name) {
 			cands = append(cands, a)
 		}
 	}
@@ -556,13 +556,26 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 	return true, false, errors.Join(errs...)
 }
 
-// isCandidate applies the fixed asset filters of section 7.
-func isCandidate(name string) bool {
-	if !strings.HasSuffix(name, ".deb") && !strings.HasSuffix(name, ".rpm") {
+// isCandidate decides from the name alone, before downloading, whether an
+// asset can become a package: an enabled format uses its extension, the
+// fixed filters of section 7 and the source's exclude list do not drop
+// it, and, when the source has asset rules, at least one rule matches the
+// name (an asset no rule matches is skipped anyway).
+func (r *run) isCandidate(name string) bool {
+	if !r.m.Formats.HandlesName(name) || strings.HasSuffix(name, ".src.rpm") ||
+		strings.Contains(name, "-dbgsym") || strings.Contains(name, "-debuginfo") ||
+		matchAny(r.src.Exclude, name) {
 		return false
 	}
-	return !strings.HasSuffix(name, ".src.rpm") && !strings.Contains(name, "-dbgsym") &&
-		!strings.Contains(name, "-debuginfo")
+	if len(r.src.Assets) == 0 {
+		return true
+	}
+	for _, rule := range r.src.Assets {
+		if ok, _ := path.Match(rule.Match, name); ok {
+			return true
+		}
+	}
+	return false
 }
 
 type downloaded struct {

@@ -60,6 +60,7 @@ func (*Format) Name() string            { return "rpm" }
 func (*Format) Namespace() string       { return "os" }
 func (*Format) ArchIndependent() string { return "noarch" }
 func (*Format) DistributionKey() string { return "release" }
+func (*Format) Extensions() []string    { return []string{".rpm"} }
 
 func (*Format) Detect(head []byte) bool { return bytes.HasPrefix(head, leadMagic) }
 
