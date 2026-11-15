@@ -673,14 +673,12 @@ func (r *run) conflict(kind, repo string, rel forge.Release, assetName, detail s
 	}
 }
 
-// checksums reads the release's checksum files (checksums.txt, SHA256SUMS,
-// *.sha256) into a map from file name to sha256.
+// checksums reads the release's checksum files into a map from file name
+// to sha256.
 func (r *run) checksums(ctx context.Context, rel forge.Release, dir string) (map[string]string, error) {
 	sums := map[string]string{}
 	for _, a := range rel.Assets {
-		lower := strings.ToLower(a.Name)
-		single := strings.HasSuffix(lower, ".sha256")
-		if lower != "checksums.txt" && lower != "sha256sums" && !strings.HasSuffix(lower, "_checksums.txt") && !single {
+		if !r.isChecksumFile(a.Name) {
 			continue
 		}
 		body, err := r.client.Download(ctx, a)
@@ -692,14 +690,27 @@ func (r *run) checksums(ctx context.Context, rel forge.Release, dir string) (map
 		if err != nil {
 			return nil, err
 		}
-		parseSums(string(data), strings.TrimSuffix(a.Name, ".sha256"), single, sums)
+		parseSums(string(data), strings.TrimSuffix(a.Name, path.Ext(a.Name)), sums)
 	}
 	return sums, nil
 }
 
-// parseSums reads "HEX  NAME" or "HEX *NAME" lines. A single-file .sha256
-// may hold only the hash; it then applies to defaultName.
-func parseSums(data, defaultName string, single bool, sums map[string]string) {
+// isChecksumFile matches the source's checksums: globs, or without them
+// the common names: checksums.txt, *_checksums.txt (GoReleaser),
+// SHA256SUMS and *.sha256, ignoring case.
+func (r *run) isChecksumFile(name string) bool {
+	if len(r.src.Checksums) > 0 {
+		return matchAny(r.src.Checksums, name)
+	}
+	lower := strings.ToLower(name)
+	return lower == "checksums.txt" || lower == "sha256sums" ||
+		strings.HasSuffix(lower, "_checksums.txt") || strings.HasSuffix(lower, ".sha256")
+}
+
+// parseSums reads "HEX  NAME" or "HEX *NAME" lines. A line holding only a
+// hash, as in a per-file tool.deb.sha256, applies to defaultName: the
+// checksum file's name without its last extension.
+func parseSums(data, defaultName string, sums map[string]string) {
 	sc := bufio.NewScanner(strings.NewReader(data))
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
@@ -710,10 +721,9 @@ func parseSums(data, defaultName string, single bool, sums map[string]string) {
 		if _, err := hex.DecodeString(h); err != nil {
 			continue
 		}
-		switch {
-		case len(f) >= 2:
+		if len(f) >= 2 {
 			sums[path.Base(strings.TrimPrefix(f[1], "*"))] = h
-		case single:
+		} else {
 			sums[defaultName] = h
 		}
 	}

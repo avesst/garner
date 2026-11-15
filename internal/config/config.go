@@ -119,6 +119,9 @@ type Source struct {
 	Assets  []AssetRule `yaml:"assets"`
 	Include []string    `yaml:"include"`
 	Exclude []string    `yaml:"exclude"`
+	// Checksums are globs naming a release's checksum files; they replace
+	// the built-in names (checksums.txt, SHA256SUMS, ...).
+	Checksums []string `yaml:"checksums"`
 
 	Archived  bool  `yaml:"archived"`
 	Forks     bool  `yaml:"forks"`

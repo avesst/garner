@@ -85,6 +85,7 @@ func TestInvalid(t *testing.T) {
 		{"group on github", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, group: a}\n", []string{"use org"}},
 		{"unknown suite", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", suite: nobel}\n", []string{`unknown suite "nobel" (deb.suites: stable)`}},
 		{"bad glob", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, owns: [\"[a-\"]}\n", []string{"sources[0].owns[0]"}},
+		{"bad checksums glob", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, checksums: [\"ok\", \"[x\"]}\n", []string{"sources[0].checksums[1]"}},
 		{"source override", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, retention: 0}\n", []string{"sources[0].retention"}},
 	}
 	for _, tt := range tests {

@@ -264,6 +264,7 @@ func (c *Config) validateSources(p *problems, forges map[string]string) {
 		validateGlobs(p, sp+".owns", s.Owns)
 		validateGlobs(p, sp+".include", s.Include)
 		validateGlobs(p, sp+".exclude", s.Exclude)
+		validateGlobs(p, sp+".checksums", s.Checksums)
 		c.validateAssets(p, sp, s.Assets)
 
 		st := c.Settings(s)

@@ -330,6 +330,7 @@ sources:
         suite: stable
         release: stable
     exclude: ["*-musl*"]
+    checksums: ["tool_*_SHA256SUMS"]   # replaces the built-in names
 
   - name: platform-group
     forge: gitlab-intern
@@ -482,7 +483,10 @@ not trusted.
 
 - If the forge exposes an asset digest, or the release contains a checksum file
   (`checksums.txt`, `*_checksums.txt` as GoReleaser names it, `SHA256SUMS`,
-  `*.sha256`), the asset must match it. A
+  `*.sha256`, or the source's `checksums:` globs, which replace those
+  names), the asset must match it. Lines are `HASH  NAME` or `HASH *NAME`;
+  a file holding only a hash applies to the asset named like the file
+  without its last extension (`tool.deb.sha256sum` covers `tool.deb`). A
   mismatch rejects the asset.
 - `verify: opportunistic` accepts assets without a checksum and marks them
   `unverified`. `verify: required` rejects them.

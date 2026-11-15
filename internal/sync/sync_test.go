@@ -342,8 +342,8 @@ func TestTransientFailureRetries(t *testing.T) {
 func TestParseSums(t *testing.T) {
 	h := strings.Repeat("a", 64)
 	sums := map[string]string{}
-	parseSums(h+"  dist/tool.deb\n"+strings.Repeat("B", 64)+" *x.rpm\nnot a line\n", "", false, sums)
-	parseSums(h+"\n", "single.deb", true, sums)
+	parseSums(h+"  dist/tool.deb\n"+strings.Repeat("B", 64)+" *x.rpm\nnot a line\n", "checksums", sums)
+	parseSums(h+"\n", "single.deb", sums)
 	if sums["tool.deb"] != h || sums["x.rpm"] != strings.Repeat("b", 64) || sums["single.deb"] != h {
 		t.Errorf("sums = %v", sums)
 	}
@@ -456,4 +456,30 @@ func TestReloadDoesNotWaitForRunningSync(t *testing.T) {
 	close(release)
 	// The replaced loop's sync was cancelled; the new loop polls again.
 	waitFor(t, "new loop to poll", func() bool { return f.forge.count("org/a") >= 2 })
+}
+
+func TestSourceChecksumGlobs(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool",
+		Checksums: []string{"tool_*_SHA256SUMS", "*.deb.sha256sum"}})
+	a := debtest.Build("tool", "1.0", "amd64", "a")
+	b := debtest.Build("tool-extra", "1.0", "amd64", "b")
+	c := debtest.Build("tool-other", "1.0", "amd64", "c")
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool_1.0_amd64.deb", a)
+	f.forge.add(rel, "tool-extra_1.0_amd64.deb", b)
+	f.forge.add(rel, "tool-other_1.0_amd64.deb", c)
+	f.forge.add(rel, "tool_1.0_SHA256SUMS", []byte(sum(a)+"  tool_1.0_amd64.deb\n"))
+	f.forge.add(rel, "tool-extra_1.0_amd64.deb.sha256sum", []byte(sum(b)+"\n"))
+	// A built-in name is ignored once checksums: is set.
+	f.forge.add(rel, "checksums.txt", []byte(strings.Repeat("0", 64)+"  tool-other_1.0_amd64.deb\n"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	got := strings.Join(f.placed(), "; ")
+	for _, want := range []string{"tool 1.0 stable active verified", "tool-extra 1.0 stable active verified",
+		"tool-other 1.0 stable active unverified"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %s", want, got)
+		}
+	}
 }
