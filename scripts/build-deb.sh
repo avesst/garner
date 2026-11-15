@@ -14,14 +14,15 @@ esac
 
 # Debian versions must start with a digit: v1.2.3 gives 1.2.3, commits
 # after it 1.2.3+4.gabc1234, and an untagged tree 0.0~git<date>.<hash>.
-desc=$(git -C "$root" describe --tags --always --dirty)
-case $desc in
-v[0-9]* | [0-9]*)
-	version=$(echo "${desc#v}" | sed 's/-\([0-9]*\)-g/+\1.g/; s/-dirty$/+dirty/') ;;
-*)
+# Without --always, describe fails when there is no tag: a short hash can
+# start with a digit and must not be mistaken for a version.
+if desc=$(git -C "$root" describe --tags --dirty --match 'v[0-9]*' 2>/dev/null); then
+	version=$(echo "${desc#v}" | sed 's/-\([0-9]*\)-g/+\1.g/; s/-dirty$/+dirty/')
+else
 	date=$(git -C "$root" log -1 --format=%cd --date=format:%Y%m%d)
-	version="0.0~git$date.$(echo "$desc" | sed 's/-dirty$/+dirty/')" ;;
-esac
+	hash=$(git -C "$root" describe --always --dirty | sed 's/-dirty$/+dirty/')
+	version="0.0~git$date.$hash"
+fi
 
 stage=$(mktemp -d)
 chmod 0755 "$stage" # mktemp makes it 0700; it becomes the "./" entry
