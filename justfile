@@ -2,6 +2,10 @@
 
 version := `git describe --tags --always --dirty 2>/dev/null || echo devel`
 
+# List recipes.
+default:
+    @just --list --unsorted --justfile {{justfile()}}
+
 # Check, then build.
 all: check build
 
