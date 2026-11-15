@@ -154,8 +154,23 @@ func TestPublishDeb(t *testing.T) {
 		t.Errorf("garner.sources:\n%s", src)
 	}
 	page := f.read(t, "index.html")
-	if !strings.Contains(page, f.keys.Fingerprint()) || !strings.Contains(page, snap.ID) {
+	fp := f.keys.Fingerprint()
+	if !strings.Contains(page, "<span>"+fp[:4]+"</span> <span>"+fp[4:8]+"</span>") || !strings.Contains(page, snap.ID) {
 		t.Error("landing page lacks fingerprint or snapshot id")
+	}
+	// Packages: one amd64 and one arch-independent in stable; arm64 is
+	// configured but empty.
+	for _, want := range []string{
+		`<th scope="col">amd64</th><th scope="col">arm64</th><th scope="col">all</th>`,
+		`<td class="empty">0</td>`,
+		"2 packages in this snapshot.",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("landing page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "ZgotmplZ") {
+		t.Error("landing page has a value the template escaper rejected")
 	}
 	// The same page is served inside snapshots/<id>/, so the status URL is
 	// resolved from the page's location. The snapshot ID is shown, not linked.
@@ -394,7 +409,7 @@ func TestClientFilePerSuite(t *testing.T) {
 	}
 	page := f.read(t, "index.html")
 	for _, want := range []string{
-		`data-dist="stable"`, `data-dist="testing"`, `<h3>stable (default)</h3>`,
+		`data-dist="stable"`, `data-dist="testing"`, `<h4>stable (default)</h4>`,
 		"/etc/apt/sources.list.d/garner.sources http://repo.test/clients/testing/garner.sources",
 		`<a href="clients/testing/garner.sources">garner.sources</a>`,
 	} {
