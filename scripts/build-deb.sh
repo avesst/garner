@@ -14,9 +14,12 @@ esac
 
 # Debian versions must start with a digit: v1.2.3 gives 1.2.3, commits
 # after it 1.2.3+4.gabc1234, and an untagged tree 0.0~git<date>.<hash>.
+# DEB_VERSION overrides the version, for test builds.
 # Without --always, describe fails when there is no tag: a short hash can
 # start with a digit and must not be mistaken for a version.
-if desc=$(git -C "$root" describe --tags --dirty --match 'v[0-9]*' 2>/dev/null); then
+if [ -n "${DEB_VERSION:-}" ]; then
+	version=$DEB_VERSION
+elif desc=$(git -C "$root" describe --tags --dirty --match 'v[0-9]*' 2>/dev/null); then
 	version=$(echo "${desc#v}" | sed 's/-\([0-9]*\)-g/+\1.g/; s/-dirty$/+dirty/')
 else
 	date=$(git -C "$root" log -1 --format=%cd --date=format:%Y%m%d)
@@ -66,23 +69,47 @@ Description: internal deb and rpm package repository
  rpm and gpg are needed for rpm support only.
 CONTROL
 
-# The service is not enabled or started: it needs a configuration and
-# garner init first.
+# Maintainer scripts behave like debhelper's for a service that is not
+# enabled on install (it needs a configuration and garner init first):
+# an upgrade restarts it if it runs, removal stops it, purge drops the
+# enable link left by systemctl enable. deb-systemd-invoke honours
+# policy-rc.d, so chroots and image builds do not start services.
 cat > "$stage/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
 if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
-	systemctl daemon-reload || true
+	systemctl --system daemon-reload >/dev/null || true
+	if [ -n "$2" ]; then
+		if command -v deb-systemd-invoke >/dev/null; then
+			deb-systemd-invoke try-restart garner.service >/dev/null || true
+		else
+			systemctl try-restart garner.service >/dev/null || true
+		fi
+	fi
 fi
 POSTINST
+cat > "$stage/DEBIAN/prerm" <<'PRERM'
+#!/bin/sh
+set -e
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+	if command -v deb-systemd-invoke >/dev/null; then
+		deb-systemd-invoke stop garner.service >/dev/null || true
+	else
+		systemctl stop garner.service >/dev/null || true
+	fi
+fi
+PRERM
 cat > "$stage/DEBIAN/postrm" <<'POSTRM'
 #!/bin/sh
 set -e
+if [ "$1" = purge ]; then
+	rm -f /etc/systemd/system/multi-user.target.wants/garner.service
+fi
 if [ -d /run/systemd/system ]; then
-	systemctl daemon-reload || true
+	systemctl --system daemon-reload >/dev/null || true
 fi
 POSTRM
-chmod 0755 "$stage/DEBIAN/postinst" "$stage/DEBIAN/postrm"
+chmod 0755 "$stage/DEBIAN/postinst" "$stage/DEBIAN/prerm" "$stage/DEBIAN/postrm"
 # md5sums lists everything except conffiles, which dpkg tracks itself.
 (cd "$stage" && find usr -type f -exec md5sum {} + > DEBIAN/md5sums)
 
