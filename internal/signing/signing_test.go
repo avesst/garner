@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -93,6 +94,38 @@ func TestPublicKeysContainAllKeys(t *testing.T) {
 	}
 	if len(k.Fingerprint()) != 40 {
 		t.Errorf("Fingerprint = %q, want 40 hex digits", k.Fingerprint())
+	}
+}
+
+// go-crypto keeps user IDs in a map, so its Serialize writes them in a
+// random order. The published keys and the snapshot inputs digest need the
+// same bytes every time.
+func TestPublicKeysAreDeterministic(t *testing.T) {
+	cfg := config()
+	cfg.RSABits = 1024
+	e, err := openpgp.NewEntity("garner", "repository signing key", "", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"b", "c", "a"} {
+		if err := e.AddUserId(name, "", "", cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := &Keyring{entities: openpgp.EntityList{e}}
+	_, first, err := k.PublicKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, bin, _ := k.PublicKeys(); !bytes.Equal(bin, first) {
+			t.Fatal("PublicKeys returned different bytes for the same key")
+		}
+	}
+	// Nothing is lost: the result parses back with every user ID.
+	back, err := openpgp.ReadKeyRing(bytes.NewReader(first))
+	if err != nil || len(back) != 1 || len(back[0].Identities) != 4 {
+		t.Fatalf("read back %d keys, err %v", len(back), err)
 	}
 }
 

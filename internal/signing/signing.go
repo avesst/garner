@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,7 +147,7 @@ func (k *Keyring) DetachSign(w io.Writer, data []byte) error {
 func (k *Keyring) PublicKeys() (armored, binary []byte, err error) {
 	var bin bytes.Buffer
 	for _, e := range k.entities {
-		if err := e.Serialize(&bin); err != nil {
+		if err := serializePublic(&bin, e); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -162,6 +164,61 @@ func (k *Keyring) PublicKeys() (armored, binary []byte, err error) {
 	}
 	arm.WriteByte('\n')
 	return arm.Bytes(), bin.Bytes(), nil
+}
+
+// serializePublic writes e like Entity.Serialize, but with the user IDs in
+// a fixed order: the primary one first, then by name. Serialize ranges over
+// a map, so a key with several user IDs would come out differently each
+// time, and so would the published key files.
+func serializePublic(w io.Writer, e *openpgp.Entity) error {
+	if err := e.PrimaryKey.Serialize(w); err != nil {
+		return err
+	}
+	for _, sig := range e.Revocations {
+		if err := sig.Serialize(w); err != nil {
+			return err
+		}
+	}
+	for _, sig := range e.Signatures {
+		if err := sig.Serialize(w); err != nil {
+			return err
+		}
+	}
+	idents := slices.Collect(maps.Values(e.Identities))
+	primary := e.PrimaryIdentity()
+	slices.SortFunc(idents, func(a, b *openpgp.Identity) int {
+		switch {
+		case a == primary:
+			return -1
+		case b == primary:
+			return 1
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	for _, ident := range idents {
+		if err := ident.UserId.Serialize(w); err != nil {
+			return err
+		}
+		for _, sig := range ident.Signatures {
+			if err := sig.Serialize(w); err != nil {
+				return err
+			}
+		}
+	}
+	for _, sub := range e.Subkeys {
+		if err := sub.PublicKey.Serialize(w); err != nil {
+			return err
+		}
+		for _, sig := range sub.Revocations {
+			if err := sig.Serialize(w); err != nil {
+				return err
+			}
+		}
+		if err := sub.Sig.Serialize(w); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (k *Keyring) Fingerprint() string {
