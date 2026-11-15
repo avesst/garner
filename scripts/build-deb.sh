@@ -13,7 +13,9 @@ amd64 | arm64) ;;
 esac
 
 # Debian versions must start with a digit: v1.2.3 gives 1.2.3, commits
-# after it 1.2.3+4.gabc1234, and an untagged tree 0.0~git<date>.<hash>.
+# after it 1.2.3+4.gabc1234, and an untagged tree 0.0~git<time>.<hash>,
+# where time is the commit time in UTC to the second, so that builds from
+# the same day sort in commit order (hashes do not).
 # DEB_VERSION overrides the version, for test builds.
 # Without --always, describe fails when there is no tag: a short hash can
 # start with a digit and must not be mistaken for a version.
@@ -22,7 +24,7 @@ if [ -n "${DEB_VERSION:-}" ]; then
 elif desc=$(git -C "$root" describe --tags --dirty --match 'v[0-9]*' 2>/dev/null); then
 	version=$(echo "${desc#v}" | sed 's/-\([0-9]*\)-g/+\1.g/; s/-dirty$/+dirty/')
 else
-	date=$(git -C "$root" log -1 --format=%cd --date=format:%Y%m%d)
+	date=$(TZ=UTC git -C "$root" log -1 --format=%cd --date=format-local:%Y%m%d%H%M%S)
 	hash=$(git -C "$root" describe --always --dirty | sed 's/-dirty$/+dirty/')
 	version="0.0~git$date.$hash"
 fi
