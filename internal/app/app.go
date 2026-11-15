@@ -282,11 +282,16 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 	defer stop()
 	cfg := a.Config()
 
-	// The first start publishes, so the repository and its key exist.
+	// The first start publishes before serving, so the repository and its
+	// key exist. Later starts publish soon after: enabled formats, keys
+	// and the binary may have changed since the current snapshot, and
+	// none of them is part of the configuration hash.
 	if _, err := a.Store.CurrentSnapshot(ctx); errors.Is(err, store.ErrNotFound) {
 		if err := a.publishAndCollect(ctx); err != nil {
 			return err
 		}
+	} else {
+		a.Scheduler.Request()
 	}
 
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: a.Server().Handler(), ReadHeaderTimeout: 30 * time.Second}
