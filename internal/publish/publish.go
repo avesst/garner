@@ -38,8 +38,10 @@ type Publisher struct {
 	ConfigCommit func() string
 	// Version is garner's version; a new build may render differently.
 	Version string
-	Root    string
-	Log     *slog.Logger
+	// Build identifies the executable (BuildID), or is "" if unknown.
+	Build string
+	Root  string
+	Log   *slog.Logger
 
 	// mu allows one publish at a time. With multiple nodes this becomes a
 	// database lock held by the leader (section 18).
@@ -111,15 +113,16 @@ func (p *Publisher) Stale(ctx context.Context) (bool, error) {
 }
 
 // inputs digests what a snapshot is rendered from, apart from the time:
-// garner's version, the configuration and its commit, the enabled
-// formats, the signing keys and the package set.
+// garner's version and build, the configuration and its commit, the
+// enabled formats, the signing keys and the package set.
 func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*format.Package) (string, error) {
 	h := sha256.New()
 	commit := ""
 	if p.ConfigCommit != nil {
 		commit = p.ConfigCommit()
 	}
-	fmt.Fprintf(h, "garner snapshot inputs 1\nversion %q\nconfig %q\ncommit %q\n", p.Version, cfg.Hash, commit)
+	fmt.Fprintf(h, "garner snapshot inputs 2\nversion %q\nbuild %q\nconfig %q\ncommit %q\n",
+		p.Version, p.Build, cfg.Hash, commit)
 	for _, fm := range p.Formats.All() {
 		fmt.Fprintf(h, "format %q\n", fm.Name())
 	}

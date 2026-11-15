@@ -290,6 +290,7 @@ func TestStaleComparesInputs(t *testing.T) {
 	}{
 		{"package", func() { f.add(t, "app", "1.1", "amd64") }},
 		{"version", func() { f.pub.Version = "2.0" }},
+		{"build", func() { f.pub.Build = "other" }},
 		{"config", func() { f.cfg.Hash = "beef" }},
 		{"config commit", func() { f.pub.ConfigCommit = func() string { return "abc123" } }},
 		{"signing key", func() {

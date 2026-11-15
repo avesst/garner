@@ -153,9 +153,13 @@ func Open(ctx context.Context, configPath, version string, extra ...format.Forma
 		Store: a.Store, Blobs: a.Blobs, Formats: a.Formats, Config: a.Config,
 		TmpDir: filepath.Join(cfg.Storage.Path, "tmp"), Publish: a.Scheduler.Request, Log: log,
 	}
+	build, err := publish.BuildID()
+	if err != nil {
+		log.Warn("cannot identify the garner build; a rebuild with the same version will not republish on start", "err", err)
+	}
 	a.Publisher = &publish.Publisher{
 		Store: a.Store, Blobs: a.Blobs, Formats: a.Formats, Config: a.Config, Signer: a.Signer,
-		ConfigCommit: a.ConfigCommit, Version: version, Root: cfg.Storage.Path, Log: log,
+		ConfigCommit: a.ConfigCommit, Version: version, Build: build, Root: cfg.Storage.Path, Log: log,
 	}
 	a.Scheduler.Publish = a.publishAndCollect
 	a.registerMetrics()
