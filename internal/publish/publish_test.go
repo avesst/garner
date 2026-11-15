@@ -253,6 +253,58 @@ func TestRetentionAndRollback(t *testing.T) {
 	}
 }
 
+func TestStaleComparesInputs(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	stale := func() bool {
+		t.Helper()
+		s, err := f.pub.Stale(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if !stale() {
+		t.Error("without a snapshot: want stale")
+	}
+	f.add(t, "app", "1.0", "amd64")
+	f.publish(t)
+	if stale() {
+		t.Error("right after a publish: want up to date")
+	}
+
+	otherKey := filepath.Join(f.root, "other.asc")
+	if _, err := signing.GenerateBits(otherKey, "other", "other@example.com", 2048); err != nil {
+		t.Fatal(err)
+	}
+	changes := []struct {
+		name   string
+		change func()
+	}{
+		{"package", func() { f.add(t, "app", "1.1", "amd64") }},
+		{"version", func() { f.pub.Version = "2.0" }},
+		{"config", func() { f.cfg.Hash = "beef" }},
+		{"config commit", func() { f.pub.ConfigCommit = func() string { return "abc123" } }},
+		{"signing key", func() {
+			k, err := signing.Load([]signing.KeySource{{KeyFile: otherKey}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.keys = k
+		}},
+	}
+	for _, c := range changes {
+		c.change()
+		if !stale() {
+			t.Errorf("after a %s change: want stale", c.name)
+		}
+		f.publish(t)
+		if stale() {
+			t.Errorf("after publishing the %s change: want up to date", c.name)
+		}
+	}
+}
+
 func TestGC(t *testing.T) {
 	f := newFixture(t)
 	f.cfg.Storage.SnapshotRetention = 2

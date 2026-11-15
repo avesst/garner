@@ -550,6 +550,13 @@ types.
    `rename(2)` it over the old one.
 7. Mark the snapshot current in the database.
 
+Each snapshot records a digest of its inputs: garner's version, the
+configuration hash and commit, the enabled formats, the signing keys and the
+package set after retention. A start publishes only when that digest differs
+from the current snapshot's, so restarts do not push real history out of
+`snapshot_retention`, while a changed binary, key or installed rpm tool is
+still published.
+
 Step 4 closes the race between a client reading the signed top-level file
 (`InRelease`, `repomd.xml`) and fetching the index files it lists. Without it,
 a publish in between removes those files and the client fails with a hash

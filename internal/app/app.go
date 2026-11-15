@@ -155,7 +155,7 @@ func Open(ctx context.Context, configPath, version string, extra ...format.Forma
 	}
 	a.Publisher = &publish.Publisher{
 		Store: a.Store, Blobs: a.Blobs, Formats: a.Formats, Config: a.Config, Signer: a.Signer,
-		ConfigCommit: a.ConfigCommit, Root: cfg.Storage.Path, Log: log,
+		ConfigCommit: a.ConfigCommit, Version: version, Root: cfg.Storage.Path, Log: log,
 	}
 	a.Scheduler.Publish = a.publishAndCollect
 	a.registerMetrics()
@@ -285,15 +285,22 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 	cfg := a.Config()
 
 	// The first start publishes before serving, so the repository and its
-	// key exist. Later starts publish soon after: enabled formats, keys
-	// and the binary may have changed since the current snapshot, and
-	// none of them is part of the configuration hash.
+	// key exist. Later starts publish soon after only if something the
+	// current snapshot was rendered from changed while garner was stopped:
+	// enabled formats, keys and the binary are not in the configuration
+	// hash.
 	if _, err := a.Store.CurrentSnapshot(ctx); errors.Is(err, store.ErrNotFound) {
 		if err := a.publishAndCollect(ctx); err != nil {
 			return err
 		}
-	} else {
+	} else if stale, err := a.Publisher.Stale(ctx); err != nil {
+		a.Log.Warn("could not compare with the current snapshot; publishing", "err", err)
 		a.Scheduler.Request()
+	} else if stale {
+		a.Log.Info("inputs changed since the current snapshot; publishing")
+		a.Scheduler.Request()
+	} else {
+		a.Log.Info("current snapshot is up to date")
 	}
 
 	srv := &http.Server{Addr: cfg.Server.Listen, Handler: a.Server().Handler(), ReadHeaderTimeout: 30 * time.Second}

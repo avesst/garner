@@ -4,8 +4,11 @@ package publish
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -33,8 +36,10 @@ type Publisher struct {
 	Signer  func() signing.Signer
 	// ConfigCommit returns the git commit of the configuration file, or "".
 	ConfigCommit func() string
-	Root         string
-	Log          *slog.Logger
+	// Version is garner's version; a new build may render differently.
+	Version string
+	Root    string
+	Log     *slog.Logger
 
 	// mu allows one publish at a time. With multiple nodes this becomes a
 	// database lock held by the leader (section 18).
@@ -76,6 +81,62 @@ func (p *Publisher) Publish(ctx context.Context) (*store.Snapshot, error) {
 		}
 	}
 	return p.publish(ctx, cfg, keep)
+}
+
+// Stale reports whether a publish would render something other than the
+// current snapshot. A start uses it to skip a publish when nothing
+// changed: enabled formats, signing keys and garner itself can change
+// while garner is stopped, and none of them is in the configuration hash.
+func (p *Publisher) Stale(ctx context.Context) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cur, err := p.Store.CurrentSnapshot(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	cfg := p.Config()
+	active, err := p.Store.Placed(ctx, store.PackageFilter{States: []string{store.Active}})
+	if err != nil {
+		return false, err
+	}
+	keep, _ := p.retain(cfg, active)
+	inputs, err := p.inputs(cfg, p.Signer(), keep)
+	if err != nil {
+		return false, err
+	}
+	return inputs != cur.Inputs, nil
+}
+
+// inputs digests what a snapshot is rendered from, apart from the time:
+// garner's version, the configuration and its commit, the enabled
+// formats, the signing keys and the package set.
+func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*format.Package) (string, error) {
+	h := sha256.New()
+	commit := ""
+	if p.ConfigCommit != nil {
+		commit = p.ConfigCommit()
+	}
+	fmt.Fprintf(h, "garner snapshot inputs 1\nversion %q\nconfig %q\ncommit %q\n", p.Version, cfg.Hash, commit)
+	for _, fm := range p.Formats.All() {
+		fmt.Fprintf(h, "format %q\n", fm.Name())
+	}
+	_, keys, err := signer.PublicKeys()
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(h, "signer %q\nkeys %x\n", signer.Fingerprint(), sha256.Sum256(keys))
+	entries := make([]string, len(pkgs))
+	for i, pk := range pkgs {
+		entries[i] = fmt.Sprintf("package %q %q\n", pk.ID, pk.Distribution)
+	}
+	slices.Sort(entries)
+	for _, e := range entries {
+		io.WriteString(h, e)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // Rollback publishes a new snapshot with the package set of snapshot id.
@@ -187,7 +248,11 @@ func retentionFor(cfg *config.Config, pk *format.Package) int {
 func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*format.Package) (*store.Snapshot, error) {
 	start := time.Now()
 	signer := p.Signer()
-	snap := &store.Snapshot{ID: id.New(), CreatedAt: store.Now(), ConfigHash: cfg.Hash}
+	inputs, err := p.inputs(cfg, signer, pkgs)
+	if err != nil {
+		return nil, err
+	}
+	snap := &store.Snapshot{ID: id.New(), CreatedAt: store.Now(), ConfigHash: cfg.Hash, Inputs: inputs}
 	final := filepath.Join(p.snapshotsDir(), snap.ID)
 	tmp := final + ".tmp"
 	if err := os.MkdirAll(tmp, 0o755); err != nil {

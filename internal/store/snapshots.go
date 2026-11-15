@@ -11,6 +11,8 @@ type Snapshot struct {
 	CreatedAt  string `json:"created_at"`
 	ConfigHash string `json:"config_hash"`
 	IsCurrent  bool   `json:"current"`
+	// Inputs is a digest of what the snapshot was rendered from.
+	Inputs string `json:"-"`
 }
 
 // SnapshotEntry places a package in a distribution of a snapshot.
@@ -21,8 +23,8 @@ type SnapshotEntry struct {
 
 // InsertSnapshot records a snapshot and its package set.
 func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []SnapshotEntry) error {
-	if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshots (id, created_at, config_hash, is_current)
-		VALUES (?, ?, ?, ?)`, s.ID, s.CreatedAt, s.ConfigHash, false); err != nil {
+	if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshots (id, created_at, config_hash, is_current, inputs)
+		VALUES (?, ?, ?, ?, ?)`, s.ID, s.CreatedAt, s.ConfigHash, false, s.Inputs); err != nil {
 		return err
 	}
 	for _, e := range entries {
@@ -45,7 +47,7 @@ func (q *Queries) SetCurrent(ctx context.Context, id string) error {
 
 // Snapshots lists snapshots, newest first.
 func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
-	rows, err := q.q.QueryContext(ctx, `SELECT id, created_at, config_hash, is_current FROM snapshots
+	rows, err := q.q.QueryContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs FROM snapshots
 		ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
@@ -54,7 +56,7 @@ func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
 	var out []Snapshot
 	for rows.Next() {
 		var s Snapshot
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -65,8 +67,8 @@ func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
 // CurrentSnapshot returns the current snapshot, or ErrNotFound.
 func (q *Queries) CurrentSnapshot(ctx context.Context) (*Snapshot, error) {
 	var s Snapshot
-	err := q.q.QueryRowContext(ctx, `SELECT id, created_at, config_hash, is_current FROM snapshots
-		WHERE is_current`).Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent)
+	err := q.q.QueryRowContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs FROM snapshots
+		WHERE is_current`).Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs)
 	if err != nil {
 		return nil, wrapNotFound(err, "current snapshot")
 	}
