@@ -189,6 +189,21 @@ func TestPublishRemoveAndRead(t *testing.T) {
 	if cc := w.Header().Get("Cache-Control"); cc != "no-cache" {
 		t.Errorf("Packages Cache-Control = %q", cc)
 	}
+	if _, rest, ok := strings.Cut(w.Body.String(), "Filename: "); ok {
+		file, _, _ := strings.Cut(rest, "\n")
+		w := f.do(http.MethodGet, "/deb/"+file, "", nil, "")
+		if cc := w.Header().Get("Cache-Control"); w.Code != 200 || !strings.Contains(cc, "immutable") {
+			t.Errorf("pool file %s: HTTP %d, Cache-Control = %q", file, w.Code, cc)
+		}
+	} else {
+		t.Error("Packages has no Filename")
+	}
+	for _, path := range []string{"/deb/pool/", "/snapshots/"} {
+		w := f.do(http.MethodGet, path, "", nil, "")
+		if cc := w.Header().Get("Cache-Control"); w.Code != 200 || cc != "no-cache" {
+			t.Errorf("listing %s: HTTP %d, Cache-Control = %q", path, w.Code, cc)
+		}
+	}
 	if w := f.do(http.MethodPost, "/deb/dists/stable/InRelease", "", nil, ""); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST to the tree: HTTP %d", w.Code)
 	}

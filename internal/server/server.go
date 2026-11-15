@@ -123,13 +123,16 @@ func (s *Server) Handler() http.Handler {
 // setCache lets proxies keep content-addressed files and makes them
 // revalidate everything else, which changes with each publish.
 //
+// Directory listings change with each upload or publish, so paths ending
+// in "/" always revalidate, even inside the pool and snapshots.
+//
 // For the mutable files it also drops If-Modified-Since: Last-Modified has
 // one-second resolution, so after two publishes within a second a client
 // would get 304 for a changed InRelease.
 func setCache(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	if strings.Contains(path, "/by-hash/") || strings.Contains(path, "/pool/") ||
-		strings.HasPrefix(path, "/snapshots/") {
+	if !strings.HasSuffix(path, "/") && (strings.Contains(path, "/by-hash/") ||
+		strings.Contains(path, "/pool/") || strings.HasPrefix(path, "/snapshots/")) {
 		w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
 		return
 	}
