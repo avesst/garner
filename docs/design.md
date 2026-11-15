@@ -80,6 +80,11 @@ PostgreSQL come later (section 18).
 - Ingest records a package in the database and requests a publish. Publish
   requests are debounced (default 10 s) so a burst of uploads yields one
   publish.
+- Under systemd, garner runs as `Type=notify`: it reports readiness after
+  its first publish and keeps its listening sockets in systemd's file
+  descriptor store. On a restart the socket stays open, so requests wait
+  for the new process instead of being refused. The address still comes
+  from `server.listen`; when it changes, garner replaces the stored socket.
 - `public/` is plain files. When the reverse proxy serves it directly from
   disk (section 4), apt and dnf clients keep working while garner is stopped
   or restarting; only uploads and sync pause. With the built-in server, reads

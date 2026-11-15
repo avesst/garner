@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ import (
 	"github.com/avesst/garner/internal/ingest"
 	"github.com/avesst/garner/internal/metrics"
 	"github.com/avesst/garner/internal/publish"
+	"github.com/avesst/garner/internal/sdnotify"
 	"github.com/avesst/garner/internal/server"
 	"github.com/avesst/garner/internal/signing"
 	"github.com/avesst/garner/internal/store"
@@ -301,15 +303,38 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 		mux.Handle("GET /metrics", a.Metrics.Handler())
 		servers = append(servers, &http.Server{Addr: cfg.Metrics.Listen, Handler: mux, ReadHeaderTimeout: 30 * time.Second})
 	}
+	// Under systemd, listeners stored by the previous run of the service
+	// are reused, so connections queue during a restart (sdnotify.Listen).
+	files := sdnotify.Files()
+	names := []string{"http", "metrics"}
+	listeners := make([]net.Listener, len(servers))
+	for i, s := range servers {
+		l, err := sdnotify.Listen(names[i], s.Addr, files, a.Log)
+		if err != nil {
+			for _, l := range listeners[:i] {
+				l.Close()
+			}
+			return fmt.Errorf("listen on %s: %w", s.Addr, err)
+		}
+		listeners[i] = l
+	}
+	// Anything left was stored for a listener no longer configured.
+	for name, fs := range files {
+		for _, f := range fs {
+			f.Close()
+		}
+		sdnotify.Remove(name)
+	}
 	errc := make(chan error, len(servers))
-	for _, s := range servers {
+	for i, s := range servers {
 		go func() {
-			a.Log.Info("listening", "addr", s.Addr)
-			if err := s.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			a.Log.Info("listening", "addr", listeners[i].Addr())
+			if err := s.Serve(listeners[i]); !errors.Is(err, http.ErrServerClosed) {
 				errc <- err
 			}
 		}()
 	}
+	sdnotify.Notify("READY=1")
 
 	var wg sync.WaitGroup
 	run := func(fn func(context.Context)) {
@@ -338,6 +363,7 @@ loop:
 		}
 	}
 	a.Log.Info("shutting down")
+	sdnotify.Notify("STOPPING=1")
 	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, s := range servers {

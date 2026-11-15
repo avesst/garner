@@ -13,7 +13,12 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-Type=exec
+# notify: garner reports readiness after its first publish. The descriptor
+# store keeps garner's listening sockets open across restarts, so requests
+# wait instead of being refused; garner opens the address from
+# server.listen and replaces a stored socket when that changes.
+Type=notify
+FileDescriptorStoreMax=2
 ExecStart=/usr/local/bin/garner serve --config /etc/garner/garner.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
