@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	gosync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,16 @@ type fakeForge struct {
 	releases map[string][]forge.Release
 	files    map[string][]byte // asset URL -> body
 	fail     map[string]bool   // asset URL -> download fails
+
+	mu    gosync.Mutex
+	calls map[string]int           // repo -> Releases calls
+	block map[string]chan struct{} // repo -> Releases waits for close
+}
+
+func (f *fakeForge) count(repo string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls[repo]
 }
 
 func (f *fakeForge) Name() string            { return "fake" }
@@ -38,7 +50,21 @@ func (f *fakeForge) RateLimitRemaining() int { return -1 }
 func (f *fakeForge) ListRepos(context.Context, string, bool) ([]forge.Repo, error) {
 	return f.repos, nil
 }
-func (f *fakeForge) Releases(_ context.Context, repo string, _ time.Time, _ string) ([]forge.Release, string, error) {
+func (f *fakeForge) Releases(ctx context.Context, repo string, _ time.Time, _ string) ([]forge.Release, string, error) {
+	f.mu.Lock()
+	if f.calls == nil {
+		f.calls = map[string]int{}
+	}
+	f.calls[repo]++
+	block := f.block[repo]
+	f.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		}
+	}
 	return f.releases[repo], "", nil
 }
 func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, error) {
@@ -63,6 +89,7 @@ func (f *fakeForge) add(rel *forge.Release, name string, body []byte) forge.Asse
 type fixture struct {
 	t     *testing.T
 	cfg   *config.Config
+	live  atomic.Pointer[config.Config] // what the manager reads
 	st    *store.Store
 	forge *fakeForge
 	m     *Manager
@@ -86,8 +113,9 @@ func newFixture(t *testing.T, src config.Source) *fixture {
 	f := &fixture{t: t, cfg: cfg, forge: &fakeForge{releases: map[string][]forge.Release{},
 		files: map[string][]byte{}, fail: map[string]bool{}}}
 	f.st = store.New(d.DB)
+	f.live.Store(cfg)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	conf := func() *config.Config { return f.cfg }
+	conf := func() *config.Config { return f.live.Load() }
 	f.m = &Manager{
 		Store: f.st, Formats: reg, Config: conf, TmpDir: dir, Log: log,
 		Ingester:  &ingest.Ingester{Store: f.st, Blobs: blobs, Formats: reg, Config: conf, TmpDir: dir, Log: log},
@@ -333,4 +361,99 @@ func TestUnconfiguredArchIsSkippedNotFailed(t *testing.T) {
 	if len(st) != 1 || len(st[0].Skipped) != 1 || !strings.Contains(st[0].Skipped[0], "arm64") {
 		t.Errorf("status = %+v, want the arm64 asset listed as skipped", st)
 	}
+}
+
+// reload replaces the configuration, as a SIGHUP would, and applies it.
+func (f *fixture) reload(edit func(c *config.Config)) {
+	f.t.Helper()
+	c := *f.live.Load()
+	c.Sources = append([]config.Source(nil), c.Sources...)
+	edit(&c)
+	f.live.Store(&c)
+	f.cfg = &c
+	if err := f.m.Restart(); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestReloadRestartsOnlyChangedSources(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "a", Repo: "org/a"})
+	f.m.MaxStartDelay = time.Millisecond
+	f.reload(func(c *config.Config) {
+		c.Sources = append(c.Sources, config.Source{Name: "b", Forge: "gh", Repo: "org/b"})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := f.m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer f.m.Stop()
+	waitFor(t, "first polls", func() bool { return f.forge.count("org/a") == 1 && f.forge.count("org/b") == 1 })
+
+	// Change b, add c, leave a alone.
+	f.reload(func(c *config.Config) {
+		c.Sources[1].Exclude = []string{"*-musl*"}
+		c.Sources = append(c.Sources, config.Source{Name: "c", Forge: "gh", Repo: "org/c"})
+	})
+	waitFor(t, "changed and new sources to poll", func() bool { return f.forge.count("org/b") == 2 && f.forge.count("org/c") == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if n := f.forge.count("org/a"); n != 1 {
+		t.Errorf("unchanged source polled %d times after a reload, want 1", n)
+	}
+
+	// A reload with nothing changed polls nothing.
+	f.reload(func(*config.Config) {})
+	time.Sleep(50 * time.Millisecond)
+	if a, b, c := f.forge.count("org/a"), f.forge.count("org/b"), f.forge.count("org/c"); a != 1 || b != 2 || c != 1 {
+		t.Errorf("polls after an unchanged reload: a=%d b=%d c=%d, want 1 2 1", a, b, c)
+	}
+
+	// Removing a source stops it.
+	f.reload(func(c *config.Config) { c.Sources = c.Sources[:2] })
+	if err := f.m.Trigger("c"); err == nil {
+		t.Error("removed source can still be triggered")
+	}
+	if err := f.m.Trigger("a"); err != nil {
+		t.Errorf("trigger a: %v", err)
+	}
+	waitFor(t, "triggered poll", func() bool { return f.forge.count("org/a") == 2 })
+}
+
+func TestReloadDoesNotWaitForRunningSync(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "a", Repo: "org/a"})
+	release := make(chan struct{})
+	f.forge.block = map[string]chan struct{}{"org/a": release}
+	f.m.MaxStartDelay = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := f.m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer f.m.Stop()
+	waitFor(t, "sync to start", func() bool { return f.forge.count("org/a") == 1 })
+
+	done := make(chan struct{})
+	go func() {
+		f.reload(func(c *config.Config) { c.Sources[0].Exclude = []string{"x"} })
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reload waited for a running sync")
+	}
+	close(release)
+	// The replaced loop's sync was cancelled; the new loop polls again.
+	waitFor(t, "new loop to poll", func() bool { return f.forge.count("org/a") >= 2 })
 }

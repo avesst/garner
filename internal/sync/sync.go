@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	gosync "sync"
@@ -40,11 +41,13 @@ type Manager struct {
 	Log      *slog.Logger
 	// NewClient creates forge clients; tests replace it.
 	NewClient func(config.Forge) (forge.Client, error)
+	// MaxStartDelay bounds the random delay before a new loop's first
+	// poll (default 30 s), so many sources do not poll at once.
+	MaxStartDelay time.Duration
 
 	mu       gosync.Mutex
-	base     context.Context // from the first Start, for Restart
-	cancel   context.CancelFunc
-	triggers map[string]chan struct{}
+	base     context.Context // from Start; loops derive from it
+	workers  map[string]*worker
 	running  map[string]bool
 	repoInfo map[string][]string // source -> repos without matching assets
 	skipped  map[string][]string // source -> assets skipped in the last run
@@ -56,7 +59,20 @@ type Manager struct {
 	added       *metrics.Vec
 }
 
-var _ server.Syncer = (*Manager)(nil)
+// worker is one source's poll loop and the configuration it started with.
+type worker struct {
+	cancel context.CancelFunc
+	trig   chan struct{}
+	key    workerKey
+}
+
+// workerKey is everything that decides how a source is polled. A reload
+// restarts a source's loop only when its key changes.
+type workerKey struct {
+	Source   config.Source
+	Settings config.Settings
+	Forge    config.Forge
+}
 
 // RegisterMetrics adds the sync metrics of section 13.
 func (m *Manager) RegisterMetrics(r *metrics.Registry) {
@@ -75,79 +91,106 @@ func (m *Manager) RegisterMetrics(r *metrics.Registry) {
 	})
 }
 
-// Start (re)starts the poll loops for the current configuration. Call it
-// again after a reload.
+// Start starts the poll loops for the current configuration. Loops stop
+// when ctx is done.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	m.base = ctx
+	if m.running == nil {
+		m.running = map[string]bool{}
+		m.repoInfo = map[string][]string{}
+		m.skipped = map[string][]string{}
+	}
+	m.mu.Unlock()
+	return m.Restart()
+}
+
+// Restart applies the current configuration after a reload. Forge
+// clients are rebuilt, so rotated tokens take effect. Sources whose
+// settings are unchanged keep their loop and schedule; new and changed
+// sources get a new loop, removed ones are stopped. It does not wait for
+// running syncs: a cancelled sync stops at its next step and its release
+// stays unseen, so the next run retries it.
+func (m *Manager) Restart() error {
 	cfg := m.Config()
-	clients := map[string]forge.Client{}
 	newClient := m.NewClient
 	if newClient == nil {
 		newClient = forge.New
 	}
+	clients := map[string]forge.Client{}
+	forges := map[string]config.Forge{}
 	for _, f := range cfg.Forges {
 		c, err := newClient(f)
 		if err != nil {
 			return fmt.Errorf("forge %s: %w", f.Name, err)
 		}
 		clients[f.Name] = c
+		forges[f.Name] = f
 	}
-	m.Stop()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.base = ctx
-	ctx, m.cancel = context.WithCancel(ctx)
-	m.clients = clients
-	m.triggers = map[string]chan struct{}{}
-	if m.running == nil {
-		m.running = map[string]bool{}
-		m.repoInfo = map[string][]string{}
-		m.skipped = map[string][]string{}
+	if m.base == nil || m.base.Err() != nil {
+		return nil
 	}
-	for _, s := range cfg.Sources {
-		trig := make(chan struct{}, 1)
-		m.triggers[s.Name] = trig
+	m.clients = clients
+	if m.workers == nil {
+		m.workers = map[string]*worker{}
+	}
+	want := map[string]workerKey{}
+	for _, src := range cfg.Sources {
+		want[src.Name] = workerKey{Source: src, Settings: cfg.Settings(src), Forge: forges[src.Forge]}
+	}
+	for name, w := range m.workers {
+		if k, ok := want[name]; !ok || !reflect.DeepEqual(k, w.key) {
+			w.cancel()
+			delete(m.workers, name)
+			if ok {
+				m.Log.Info("source changed; restarting its poll loop", "source", name)
+			} else {
+				m.Log.Info("source removed; stopping its poll loop", "source", name)
+			}
+		}
+	}
+	for name, k := range want {
+		if _, ok := m.workers[name]; ok {
+			continue
+		}
+		ctx, cancel := context.WithCancel(m.base)
+		w := &worker{cancel: cancel, trig: make(chan struct{}, 1), key: k}
+		m.workers[name] = w
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.loop(ctx, s.Name, trig)
+			m.loop(ctx, name, w.trig)
 		}()
 	}
 	return nil
 }
 
-// Restart restarts the loops after a reload, if Start has run.
-func (m *Manager) Restart() error {
-	m.mu.Lock()
-	base := m.base
-	m.mu.Unlock()
-	if base == nil || base.Err() != nil {
-		return nil
-	}
-	return m.Start(base)
-}
-
-// Stop ends the poll loops and waits for running syncs.
+// Stop ends every poll loop and waits for running syncs, for shutdown.
+// Restart does nothing after Stop until Start runs again.
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	cancel := m.cancel
-	m.cancel = nil
-	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	m.base = nil
+	for name, w := range m.workers {
+		w.cancel()
+		delete(m.workers, name)
 	}
+	m.mu.Unlock()
 	m.wg.Wait()
 }
 
 // Trigger starts a sync of a source now.
 func (m *Manager) Trigger(name string) error {
 	m.mu.Lock()
-	trig, ok := m.triggers[name]
+	w, ok := m.workers[name]
 	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("no source named %q", name)
 	}
 	select {
-	case trig <- struct{}{}:
+	case w.trig <- struct{}{}:
 	default: // one is already pending
 	}
 	return nil
@@ -172,9 +215,11 @@ func (m *Manager) Status(ctx context.Context) []server.SourceStatus {
 }
 
 func (m *Manager) loop(ctx context.Context, name string, trig chan struct{}) {
-	// A short random delay spreads the first polls after a start.
-	first := time.Duration(rand.Int64N(int64(30 * time.Second)))
-	timer := time.NewTimer(first)
+	maxDelay := m.MaxStartDelay
+	if maxDelay <= 0 {
+		maxDelay = 30 * time.Second
+	}
+	timer := time.NewTimer(time.Duration(rand.Int64N(int64(maxDelay))))
 	defer timer.Stop()
 	for {
 		select {
@@ -194,7 +239,12 @@ func (m *Manager) loop(ctx context.Context, name string, trig chan struct{}) {
 		if !ok {
 			return
 		}
-		m.RunOnce(ctx, src)
+		if !m.RunOnce(ctx, src) {
+			// A sync from the previous loop of this source is still
+			// running (a reload replaced the loop); try again soon.
+			timer.Reset(maxDelay)
+			continue
+		}
 		interval := cfg.Settings(src).PollInterval
 		// ±10 % jitter (section 7).
 		jitter := time.Duration((rand.Float64()*0.2 - 0.1) * float64(interval))
@@ -211,12 +261,13 @@ func findSource(cfg *config.Config, name string) (config.Source, bool) {
 	return config.Source{}, false
 }
 
-// RunOnce syncs one source and records the outcome.
-func (m *Manager) RunOnce(ctx context.Context, src config.Source) {
+// RunOnce syncs one source and records the outcome. It returns false,
+// without syncing, when a sync of the source is already running.
+func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 	m.mu.Lock()
 	if m.running[src.Name] {
 		m.mu.Unlock()
-		return
+		return false
 	}
 	m.running[src.Name] = true
 	client := m.clients[src.Forge]
@@ -231,13 +282,14 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) {
 	st, err := m.Store.SourceState(ctx, src.Name)
 	if err != nil {
 		log.Error("read source state", "err", err)
-		return
+		return true
 	}
 	st.LastRun = store.Now()
 	run := &run{m: m, src: src, cfg: m.Config(), client: client, state: st, log: log}
 	err = run.sync(ctx)
 	if errors.Is(err, context.Canceled) {
-		return
+		log.Info("sync cancelled; unfinished releases are retried next run")
+		return true
 	}
 	if err != nil {
 		st.LastError = err.Error()
@@ -259,6 +311,7 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) {
 	if err := m.Store.SaveSourceState(context.Background(), st); err != nil {
 		log.Error("save source state", "err", err)
 	}
+	return true
 }
 
 // run is one sync of one source.

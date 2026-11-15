@@ -419,7 +419,12 @@ curl -fsS -u ci:$GARNER_TOKEN -T tool_1.4.0_amd64.deb \
 
 **Polling.** Each source has a `poll_interval`, with ±10 % jitter. Requests
 use `If-None-Match` with stored ETags. `garner sync <source>` triggers an
-immediate run. Webhooks come later and will only trigger a poll; the payload is
+immediate run. A new source, at startup or after a reload, first polls
+within a random 0–30 s. A reload restarts only sources whose settings
+(including inherited defaults and the forge's settings) changed; the
+others keep their schedule. It does not wait for running syncs: a changed
+or removed source's sync is cancelled, and its unfinished release is
+retried by the next run. Webhooks come later and will only trigger a poll; the payload is
 not trusted.
 
 **Forge clients.**
