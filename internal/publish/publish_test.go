@@ -153,8 +153,15 @@ func TestPublishDeb(t *testing.T) {
 	if src := f.read(t, "garner.sources"); !strings.Contains(src, "URIs: http://repo.test/deb\n") {
 		t.Errorf("garner.sources:\n%s", src)
 	}
-	if page := f.read(t, "index.html"); !strings.Contains(page, f.keys.Fingerprint()) || !strings.Contains(page, snap.ID) {
+	page := f.read(t, "index.html")
+	if !strings.Contains(page, f.keys.Fingerprint()) || !strings.Contains(page, snap.ID) {
 		t.Error("landing page lacks fingerprint or snapshot id")
+	}
+	// The same page is served inside snapshots/<id>/, so the status URL is
+	// resolved from the page's location. The snapshot ID is shown, not linked.
+	if !strings.Contains(page, `fetch(base + "api/v1/status"`) ||
+		strings.Contains(page, `href="/snapshots/`) || strings.Contains(page, `href="snapshots/`) {
+		t.Error("landing page does not resolve the status URL from its location or links to the snapshot")
 	}
 
 	if gpgv, err := exec.LookPath("gpgv"); err == nil {
@@ -356,4 +363,16 @@ func TestLinksAreReconciled(t *testing.T) {
 		t.Errorf("old client file link still present: %v", err)
 	}
 	f.read(t, "repo.sources")
+}
+
+// The page may be reached through a proxy that strips public_url's path, so
+// its path must not be baked into the status URL.
+func TestLandingStatusIgnoresPublicURLPath(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Server.PublicURL = "http://repo.test/garner/"
+	f.publish(t)
+	page := f.read(t, "index.html")
+	if strings.Contains(page, `garner/api/v1/status`) || strings.Contains(page, `garner\/api\/v1\/status`) {
+		t.Error("status URL is built from public_url")
+	}
 }

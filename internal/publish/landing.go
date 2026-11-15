@@ -147,7 +147,7 @@ a { color: var(--accent); }
 <h2>Snapshot</h2>
 <dl>
 <dt>Published</dt><dd>{{.PublishedAt}}</dd>
-<dt>Snapshot</dt><dd><a href="snapshots/{{.SnapshotID}}/">{{.SnapshotID}}</a></dd>
+<dt>Snapshot</dt><dd><code>{{.SnapshotID}}</code></dd>
 <dt>Configuration</dt><dd><code>{{.ConfigHash}}</code>{{if .ConfigCommit}} (commit <code>{{.ConfigCommit}}</code>){{end}}</dd>
 </dl>
 <h2>Status</h2>
@@ -157,7 +157,12 @@ a { color: var(--accent); }
 (function () {
   var el = document.getElementById("status-body");
   function text(tag, s, cls) { var e = document.createElement(tag); e.textContent = s; if (cls) e.className = cls; return e; }
-  fetch("api/v1/status", { cache: "no-store" }).then(function (r) {
+  // The same page is served at the root, current/ and snapshots/<id>/;
+  // find the repository root from wherever it was loaded.
+  var path = location.pathname;
+  var pinned = /\/snapshots\/[^\/]+\/(index\.html)?$/.test(path);
+  var base = path.replace(/[^\/]*$/, "").replace(/(current|snapshots\/[^\/]+)\/$/, "");
+  fetch(base + "api/v1/status", { cache: "no-store" }).then(function (r) {
     if (!r.ok) throw new Error(r.status);
     return r.json();
   }).then(function (s) {
@@ -179,8 +184,18 @@ a { color: var(--accent); }
       el.appendChild(t);
     }
     el.appendChild(text("p", "Open conflicts: " + (s.open_conflicts || 0)));
-    if (s.current_snapshot && s.current_snapshot !== "{{.SnapshotID}}")
-      el.appendChild(text("p", "A newer snapshot (" + s.current_snapshot + ") has been published; reload the page."));
+    if (s.current_snapshot && s.current_snapshot !== "{{.SnapshotID}}") {
+      if (pinned) {
+        // Snapshot pages never change, so reloading would not help.
+        var p = text("p", "This page shows snapshot {{.SnapshotID}}. The current snapshot is " + s.current_snapshot + ": ");
+        var a = text("a", "open the current page");
+        a.href = base;
+        p.appendChild(a);
+        el.appendChild(p);
+      } else {
+        el.appendChild(text("p", "A newer snapshot (" + s.current_snapshot + ") has been published; reload the page."));
+      }
+    }
   }).catch(function () {
     el.textContent = "";
     el.appendChild(text("p", "Live status is unavailable: garner is not reachable. The repository itself still works."));
