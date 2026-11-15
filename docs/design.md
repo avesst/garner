@@ -258,6 +258,9 @@ A single YAML file holds human decisions. The database holds state.
   working tree) is shown on the landing page and in `/api/v1/status`.
 - The CLI never modifies anything the file defines.
 
+[configuration.md](configuration.md) lists every key with its default and
+validation rules.
+
 ### Example
 
 ```yaml
