@@ -377,3 +377,39 @@ func TestLandingStatusIgnoresPublicURLPath(t *testing.T) {
 		t.Error("status URL is built from public_url")
 	}
 }
+
+// The default suite's client file is served at the root, the others below
+// clients/. Each installs as the same local file, and the landing page
+// offers all of them.
+func TestClientFilePerSuite(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Deb.Suites = []string{"testing", "stable"}
+	f.publish(t)
+	if src := f.read(t, "garner.sources"); !strings.Contains(src, "Suites: stable\n") {
+		t.Errorf("garner.sources:\n%s", src)
+	}
+	src := f.read(t, "clients/testing/garner.sources")
+	if !strings.Contains(src, "Suites: testing\n") || !strings.Contains(src, "Signed-By: /usr/share/keyrings/garner.gpg\n") {
+		t.Errorf("clients/testing/garner.sources:\n%s", src)
+	}
+	page := f.read(t, "index.html")
+	for _, want := range []string{
+		`data-dist="stable"`, `data-dist="testing"`, `<h3>stable (default)</h3>`,
+		"/etc/apt/sources.list.d/garner.sources http://repo.test/clients/testing/garner.sources",
+		`<a href="clients/testing/garner.sources">garner.sources</a>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("landing page lacks %q", want)
+		}
+	}
+	if strings.Contains(page, "Edit Suites:") || strings.Contains(page, "garner-testing") {
+		t.Error("landing page tells users to edit the suite by hand or installs a second source")
+	}
+
+	// With one suite left, the clients link goes away.
+	f.cfg.Deb.Suites = []string{"stable"}
+	f.publish(t)
+	if _, err := os.Lstat(filepath.Join(f.root, "public", "clients")); !os.IsNotExist(err) {
+		t.Errorf("public/clients after dropping suites: %v", err)
+	}
+}

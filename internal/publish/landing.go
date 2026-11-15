@@ -21,8 +21,16 @@ type countRow struct {
 }
 
 type clientSection struct {
-	Format       string
+	Format string
+	// Key names the distribution in this format ("suite", "release").
+	Key      string
+	Variants []clientVariant
+}
+
+type clientVariant struct {
+	Distribution string
 	FileName     string
+	Path         string
 	File         string
 	Instructions string
 }
@@ -65,13 +73,17 @@ func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signin
 		data.ConfigCommit = p.ConfigCommit()
 	}
 	for _, fm := range p.Formats.All() {
-		cf := fm.Client(cfg, data.URL)
-		if err := fsutil.WriteFile(filepath.Join(dir, cf.Name), cf.Content, 0o644); err != nil {
-			return err
+		sec := clientSection{Format: fm.Name(), Key: fm.DistributionKey()}
+		for _, cf := range fm.Clients(cfg, data.URL) {
+			if err := fsutil.WriteFile(filepath.Join(dir, filepath.FromSlash(cf.Path)), cf.Content, 0o644); err != nil {
+				return err
+			}
+			sec.Variants = append(sec.Variants, clientVariant{
+				Distribution: cf.Distribution, FileName: cf.Name, Path: cf.Path,
+				File: string(cf.Content), Instructions: cf.Instructions,
+			})
 		}
-		data.Clients = append(data.Clients, clientSection{
-			Format: fm.Name(), FileName: cf.Name, File: string(cf.Content), Instructions: cf.Instructions,
-		})
+		data.Clients = append(data.Clients, sec)
 	}
 	data.Counts = counts(pkgs)
 	var b bytes.Buffer
@@ -124,6 +136,23 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; fo
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; }
 a { color: var(--accent); }
+h3 { font-size: 1rem; margin: 1.25rem 0 .25rem; }
+.code { position: relative; }
+.code pre { padding-right: 3rem; }
+.copy, .picker button { font: .8rem system-ui, sans-serif; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; padding: .2rem .6rem; cursor: pointer; }
+.copy { position: absolute; top: .4rem; right: .4rem; padding: .3rem; line-height: 0; color: var(--muted);
+  opacity: 0; transition: opacity .15s; }
+.copy svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+.copy:hover { color: var(--fg); }
+/* Shown on hover, on keyboard focus, while reporting a result, and always
+   on devices without hover. */
+.code:hover .copy, .copy:focus-visible, .copy.done { opacity: 1; }
+@media (hover: none) { .copy { opacity: 1; } }
+.picker { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .5rem 0 0; font-size: .9rem; }
+.picker span { color: var(--muted); margin-right: .2rem; }
+.picker button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 #status-body { font-size: .9rem; }
 .err { color: #b3261e; }
 </style>
@@ -134,10 +163,20 @@ a { color: var(--accent); }
 <p class="lead">Package repository at <code>{{.URL}}</code>. Packages are signed with key
 <code>{{.Fingerprint}}</code> (<a href="key.asc">key.asc</a>, <a href="key.gpg">key.gpg</a>).</p>
 {{range .Clients}}
+<section class="client" data-key="{{.Key}}">
 <h2>{{.Format}}</h2>
+{{- $multi := gt (len .Variants) 1}}
+{{- range $i, $v := .Variants}}
+<div class="variant" data-dist="{{.Distribution}}">
+{{- if $multi}}
+<h3>{{.Distribution}}{{if eq $i 0}} (default){{end}}</h3>
+{{- end}}
 <pre><code>{{.Instructions}}</code></pre>
-<p><a href="{{.FileName}}">{{.FileName}}</a>:</p>
+<p><a href="{{.Path}}">{{.FileName}}</a>:</p>
 <pre><code>{{.File}}</code></pre>
+</div>
+{{- end}}
+</section>
 {{end}}
 <h2>Packages</h2>
 {{if .Counts}}<table>
@@ -154,6 +193,89 @@ a { color: var(--accent); }
 <div id="status-body"><p>Loading live status…</p></div>
 </main>
 <script>
+(function () {
+  // Without script every variant is shown under its own heading; with it,
+  // a picker shows one at a time.
+  document.querySelectorAll("section.client").forEach(function (sec) {
+    var variants = sec.querySelectorAll(".variant");
+    if (variants.length < 2) return;
+    var key = sec.getAttribute("data-key");
+    var picker = document.createElement("div");
+    picker.className = "picker";
+    picker.setAttribute("role", "group");
+    picker.setAttribute("aria-label", key);
+    var label = document.createElement("span");
+    label.textContent = key.charAt(0).toUpperCase() + key.slice(1) + ":";
+    picker.appendChild(label);
+    var buttons = [];
+    function show(i) {
+      variants.forEach(function (v, j) { v.hidden = i !== j; });
+      buttons.forEach(function (b, j) { b.setAttribute("aria-pressed", String(i === j)); });
+    }
+    variants.forEach(function (v, i) {
+      v.querySelector("h3").hidden = true;
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = v.getAttribute("data-dist");
+      b.addEventListener("click", function () { show(i); });
+      buttons.push(b);
+      picker.appendChild(b);
+    });
+    sec.insertBefore(picker, variants[0]);
+    show(0);
+  });
+
+  // navigator.clipboard needs a secure context; repositories are often
+  // served over plain HTTP, so fall back to execCommand there.
+  function copy(s) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(s);
+    return new Promise(function (ok, fail) {
+      var t = document.createElement("textarea");
+      t.value = s;
+      t.setAttribute("readonly", "");
+      t.style.position = "fixed";
+      t.style.opacity = "0";
+      document.body.appendChild(t);
+      t.select();
+      var done = false;
+      try { done = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(t);
+      if (done) ok(); else fail();
+    });
+  }
+  var icons = {
+    Copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>',
+    Copied: '<path d="M4 12l5 5L20 6"/>',
+    "Copy failed": '<path d="M6 6l12 12M18 6L6 18"/>'
+  };
+  function setIcon(b, label) {
+    b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + icons[label] + "</svg>";
+    b.setAttribute("aria-label", label);
+    b.title = label;
+  }
+  document.querySelectorAll("main pre").forEach(function (pre) {
+    var wrap = document.createElement("div");
+    wrap.className = "code";
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "copy";
+    setIcon(b, "Copy");
+    var timer;
+    b.addEventListener("click", function () {
+      function show(label) {
+        setIcon(b, label);
+        b.classList.add("done");
+        clearTimeout(timer);
+        timer = setTimeout(function () { setIcon(b, "Copy"); b.classList.remove("done"); }, 1500);
+      }
+      copy(pre.textContent).then(function () { show("Copied"); }, function () { show("Copy failed"); });
+    });
+    wrap.appendChild(b);
+  });
+})();
+
 (function () {
   var el = document.getElementById("status-body");
   function text(tag, s, cls) { var e = document.createElement(tag); e.textContent = s; if (cls) e.className = cls; return e; }

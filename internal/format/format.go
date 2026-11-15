@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/avesst/garner/internal/config"
@@ -84,13 +85,44 @@ type RenderRequest struct {
 	History []string
 }
 
-// ClientFile is a generated client configuration file served at the root,
-// such as garner.sources.
+// ClientFile is a generated client configuration file, such as
+// garner.sources, for one distribution.
+//
+// Every distribution's file has the same Name and installs to the same
+// local path, so a host uses one distribution of the repository at a time
+// and picking another replaces it.
 type ClientFile struct {
-	Name    string
-	Content []byte
+	Name string
+	// Path is where the file is served, relative to the repository root.
+	Path string
+	// Distribution is the suite or release the file points at.
+	Distribution string
+	Content      []byte
 	// Instructions are shell commands for the landing page.
 	Instructions string
+}
+
+// ClientsDir holds the client files of the non-default distributions.
+const ClientsDir = "clients"
+
+// ClientOrder returns the distributions to write client files for, the
+// default first: "stable" if configured, else the first one.
+func ClientOrder(ds []string) []string {
+	out := slices.Clone(ds)
+	if i := slices.Index(out, "stable"); i > 0 {
+		out = append(append([]string{"stable"}, out[:i]...), out[i+1:]...)
+	}
+	return out
+}
+
+// ClientPath is where the client file name for the i-th distribution in
+// ClientOrder is served: the default's at the root, so its URL does not
+// change when distributions are added, the others in ClientsDir.
+func ClientPath(i int, dist, name string) string {
+	if i == 0 {
+		return name
+	}
+	return ClientsDir + "/" + dist + "/" + name
 }
 
 // Format is one package format.
@@ -125,7 +157,8 @@ type Format interface {
 	Render(ctx context.Context, r *RenderRequest) error
 	// Links are the fixed symlinks in public/ for this format.
 	Links(c *config.Config) []Link
-	Client(c *config.Config, publicURL string) ClientFile
+	// Clients returns one client file per distribution, in ClientOrder.
+	Clients(c *config.Config, publicURL string) []ClientFile
 }
 
 // Registry holds the enabled formats in a fixed order.

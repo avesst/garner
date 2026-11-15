@@ -377,7 +377,12 @@ func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
 func (p *Publisher) rootFiles(cfg *config.Config) []string {
 	files := []string{"index.html", "key.asc", "key.gpg"}
 	for _, fm := range p.Formats.All() {
-		files = append(files, fm.Client(cfg, publicURL(cfg)).Name)
+		// Variants are linked once, as their top directory (ClientsDir).
+		for _, cf := range fm.Clients(cfg, publicURL(cfg)) {
+			if top, _, _ := strings.Cut(cf.Path, "/"); !slices.Contains(files, top) {
+				files = append(files, top)
+			}
+		}
 	}
 	return files
 }

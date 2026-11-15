@@ -56,8 +56,21 @@ func TestPoolPathAndClient(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.RPM.Releases = []string{"el10", "stable"}
-	c := f.Client(cfg, "https://repo.example.com")
-	if want := "baseurl=https://repo.example.com/rpm/stable/$basearch/\n"; !strings.Contains(string(c.Content), want) {
-		t.Errorf("client file lacks %q:\n%s", want, c.Content)
+	cs := f.Clients(cfg, "https://repo.example.com")
+	if len(cs) != 2 {
+		t.Fatalf("got %d client files, want 2", len(cs))
+	}
+	// stable is the default, served at the root. Every release installs as
+	// the same file and repo ID, so picking another replaces it.
+	for i, want := range []struct{ path, dist, baseurl string }{
+		{"garner.repo", "stable", "baseurl=https://repo.example.com/rpm/stable/$basearch/\n"},
+		{"clients/el10/garner.repo", "el10", "baseurl=https://repo.example.com/rpm/el10/$basearch/\n"},
+	} {
+		c := cs[i]
+		if c.Name != "garner.repo" || c.Path != want.path || c.Distribution != want.dist ||
+			!strings.HasPrefix(string(c.Content), "[garner]\n") || !strings.Contains(string(c.Content), want.baseurl) ||
+			!strings.Contains(c.Instructions, "/etc/yum.repos.d/garner.repo https://repo.example.com/"+want.path) {
+			t.Errorf("client %d = %s at %s (%s):\n%s\n%s", i, c.Name, c.Path, c.Distribution, c.Content, c.Instructions)
+		}
 	}
 }

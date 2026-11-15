@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/avesst/garner/internal/config"
@@ -176,13 +175,13 @@ func (*Format) Links(c *config.Config) []format.Link {
 	return out
 }
 
-func (*Format) Client(c *config.Config, publicURL string) format.ClientFile {
+func (*Format) Clients(c *config.Config, publicURL string) []format.ClientFile {
 	name := c.Server.ClientName
-	rel := c.RPM.Releases[0]
-	if slices.Contains(c.RPM.Releases, "stable") {
-		rel = "stable"
-	}
-	content := fmt.Sprintf(`[%[1]s]
+	var out []format.ClientFile
+	for i, rel := range format.ClientOrder(c.RPM.Releases) {
+		// One repo ID for every release, so installing another replaces it.
+		p := format.ClientPath(i, rel, name+".repo")
+		content := fmt.Sprintf(`[%[1]s]
 name=%[1]s
 baseurl=%[2]s/rpm/%[3]s/$basearch/
 enabled=1
@@ -190,12 +189,12 @@ gpgcheck=1
 repo_gpgcheck=1
 gpgkey=%[2]s/key.asc
 `, name, publicURL, rel)
-	instr := fmt.Sprintf("sudo curl -fsSLo /etc/yum.repos.d/%[2]s.repo %[1]s/%[2]s.repo", publicURL, name)
-	if len(c.RPM.Releases) > 1 {
-		instr += fmt.Sprintf("\n# Releases: %s. Edit baseurl in the .repo file to pick another.",
-			strings.Join(c.RPM.Releases, ", "))
+		instr := fmt.Sprintf("sudo curl -fsSLo /etc/yum.repos.d/%[2]s.repo %[1]s/%[3]s", publicURL, name, p)
+		out = append(out, format.ClientFile{
+			Name: name + ".repo", Path: p, Distribution: rel, Content: []byte(content), Instructions: instr,
+		})
 	}
-	return format.ClientFile{Name: name + ".repo", Content: []byte(content), Instructions: instr}
+	return out
 }
 
 // Render runs createrepo_c for every release and architecture, signs

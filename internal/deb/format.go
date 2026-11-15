@@ -111,22 +111,21 @@ func (Format) Links(c *config.Config) []format.Link {
 	}
 }
 
-func (Format) Client(c *config.Config, publicURL string) format.ClientFile {
+func (Format) Clients(c *config.Config, publicURL string) []format.ClientFile {
 	name := c.Server.ClientName
-	suite := c.Deb.Suites[0]
-	if slices.Contains(c.Deb.Suites, "stable") {
-		suite = "stable"
+	var out []format.ClientFile
+	for i, suite := range format.ClientOrder(c.Deb.Suites) {
+		p := format.ClientPath(i, suite, name+".sources")
+		content := fmt.Sprintf("Types: deb\nURIs: %s/deb\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/%s.gpg\n",
+			publicURL, suite, name)
+		instr := fmt.Sprintf(`sudo curl -fsSLo /usr/share/keyrings/%[2]s.gpg %[1]s/key.gpg
+sudo curl -fsSLo /etc/apt/sources.list.d/%[2]s.sources %[1]s/%[3]s
+sudo apt update`, publicURL, name, p)
+		out = append(out, format.ClientFile{
+			Name: name + ".sources", Path: p, Distribution: suite, Content: []byte(content), Instructions: instr,
+		})
 	}
-	content := fmt.Sprintf("Types: deb\nURIs: %s/deb\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/%s.gpg\n",
-		publicURL, suite, name)
-	instr := fmt.Sprintf(`sudo curl -fsSLo /usr/share/keyrings/%[2]s.gpg %[1]s/key.gpg
-sudo curl -fsSLo /etc/apt/sources.list.d/%[2]s.sources %[1]s/%[2]s.sources
-sudo apt update`, publicURL, name)
-	if len(c.Deb.Suites) > 1 {
-		instr += fmt.Sprintf("\n# Suites: %s. Edit Suites: in the .sources file to pick another.",
-			strings.Join(c.Deb.Suites, ", "))
-	}
-	return format.ClientFile{Name: name + ".sources", Content: []byte(content), Instructions: instr}
+	return out
 }
 
 // indexFile is one file listed in Release.
