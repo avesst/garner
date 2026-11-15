@@ -158,6 +158,9 @@ func TestCredentialsNeedSecureTransport(t *testing.T) {
 		{"trusted proxy over http", "10.0.0.1:1000", []string{"X-Forwarded-Proto", "http"}, http.StatusForbidden},
 		{"trusted proxy over https", "10.0.0.1:1000", []string{"X-Forwarded-Proto", "https"}, http.StatusOK},
 		{"ipv6 loopback", "[::1]:1000", nil, http.StatusOK},
+		{"same-host proxy over https", "127.0.0.1:1000", []string{"X-Forwarded-Proto", "https"}, http.StatusOK},
+		{"same-host proxy over http", "127.0.0.1:1000", []string{"X-Forwarded-Proto", "http"}, http.StatusForbidden},
+		{"proxy chain with an http hop", "10.0.0.1:1000", []string{"X-Forwarded-Proto", "https, http"}, http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		w := f.do(http.MethodPut, "/api/v1/upload", "up", pkg, tt.remote, tt.header...)

@@ -612,8 +612,10 @@ says which tools are missing.
   - from an address in `server.trusted_proxies` with
     `X-Forwarded-Proto: https`.
 
-  Otherwise they get `403`. `allow_insecure_auth: true` disables the check
-  for isolated labs.
+  Otherwise they get `403`. A loopback request that carries
+  `X-Forwarded-Proto` comes from a proxy on the same host, so that header
+  must say `https` too. `allow_insecure_auth: true` disables the check for
+  isolated labs.
 - Only `X-Forwarded-*` headers from trusted proxies are honoured.
 
 ## 12. Storage and database

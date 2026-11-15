@@ -142,13 +142,32 @@ func FromTrustedProxy(pol Policy, r *http.Request) bool {
 	return false
 }
 
+// secureTransport applies section 11. A loopback peer is either a local
+// client or a reverse proxy on the same host; a proxy says how its client
+// connected in X-Forwarded-Proto, and that must be https. Without the
+// header, the loopback client itself is trusted.
 func secureTransport(pol Policy, r *http.Request) bool {
 	a, ok := RemoteAddr(r)
 	if !ok {
 		return false
 	}
+	proto := r.Header.Values("X-Forwarded-Proto")
+	https := len(proto) > 0 && allHTTPS(proto)
 	if a.IsLoopback() {
-		return true
+		return len(proto) == 0 || https
 	}
-	return FromTrustedProxy(pol, r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return FromTrustedProxy(pol, r) && https
+}
+
+// allHTTPS reports whether every X-Forwarded-Proto value says https; a
+// chain of proxies may send several, comma-separated or repeated.
+func allHTTPS(values []string) bool {
+	for _, v := range values {
+		for _, p := range strings.Split(v, ",") {
+			if !strings.EqualFold(strings.TrimSpace(p), "https") {
+				return false
+			}
+		}
+	}
+	return true
 }
