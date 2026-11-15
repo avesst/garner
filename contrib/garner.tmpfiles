@@ -1,0 +1,3 @@
+# garner's state directory (tmpfiles.d(5)). 0750: the group can read it,
+# so a reverse proxy added to the garner group can serve public/ from disk.
+d /var/lib/garner 0750 garner garner -

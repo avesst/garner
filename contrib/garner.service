@@ -1,8 +1,11 @@
 # Example systemd unit for garner. Install the binary as
-# /usr/local/bin/garner, the configuration as /etc/garner/garner.yaml,
-# run init once as the service's dynamic user, which prints the admin token:
-#   systemd-run --pty --wait -p DynamicUser=yes -p StateDirectory=garner \
-#     -p ConfigurationDirectory=garner /usr/local/bin/garner init
+# /usr/local/bin/garner and the configuration as /etc/garner/garner.yaml.
+# Create the user and the state directory with garner.sysusers and
+# garner.tmpfiles from this directory:
+#   cp garner.sysusers /etc/sysusers.d/garner.conf && systemd-sysusers
+#   cp garner.tmpfiles /etc/tmpfiles.d/garner.conf && systemd-tmpfiles --create
+# run init once as that user, which prints the admin token:
+#   sudo -u garner /usr/local/bin/garner init
 # then: systemctl enable --now garner
 # rpm support needs createrepo_c, rpm-sign (rpmsign) and gnupg2 on PATH.
 
@@ -24,13 +27,17 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 
-DynamicUser=yes
+User=garner
+Group=garner
 StateDirectory=garner
+StateDirectoryMode=0750
 ConfigurationDirectory=garner
 # Forge tokens: LoadCredential=forgejo:/etc/garner/forgejo.token, then
 # token_file: /run/credentials/garner.service/forgejo in garner.yaml.
 
 NoNewPrivileges=yes
+RemoveIPC=yes
+RestrictSUIDSGID=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

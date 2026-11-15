@@ -30,7 +30,8 @@ fi
 stage=$(mktemp -d)
 chmod 0755 "$stage" # mktemp makes it 0700; it becomes the "./" entry
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/DEBIAN" "$stage/etc/garner" "$stage/usr/bin" "$stage/usr/lib/systemd/system" "$stage/usr/share/doc/garner"
+mkdir -p "$stage/DEBIAN" "$stage/etc/garner" "$stage/usr/bin" "$stage/usr/lib/systemd/system" \
+	"$stage/usr/lib/sysusers.d" "$stage/usr/lib/tmpfiles.d" "$stage/usr/share/doc/garner"
 
 CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -C "$root" -trimpath \
 	-ldflags "-s -w -X main.version=$version" -o "$stage/usr/bin/garner" ./cmd/garner
@@ -39,14 +40,15 @@ CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -C "$root" -trimpath \
 	cat <<'HEADER'
 # garner, installed by the garner package. Before the first start:
 # 1. Set server.public_url in /etc/garner/garner.yaml.
-# 2. Run init as the service's dynamic user; it prints the admin token:
-#      systemd-run --pty --wait -p DynamicUser=yes -p StateDirectory=garner \
-#        -p ConfigurationDirectory=garner /usr/bin/garner init
+# 2. Run init as the garner user; it prints the admin token:
+#      sudo -u garner garner init
 # 3. systemctl enable --now garner
 # rpm support needs the recommended packages createrepo-c, rpm and gpg.
 HEADER
 	sed '1,/^$/d; s|/usr/local/bin/garner|/usr/bin/garner|g' "$root/contrib/garner.service"
 } > "$stage/usr/lib/systemd/system/garner.service"
+cp "$root/contrib/garner.sysusers" "$stage/usr/lib/sysusers.d/garner.conf"
+cp "$root/contrib/garner.tmpfiles" "$stage/usr/lib/tmpfiles.d/garner.conf"
 # A conffile: dpkg keeps local edits on upgrade and removes it on purge.
 cp "$root/contrib/garner.yaml" "$stage/etc/garner/garner.yaml"
 echo /etc/garner/garner.yaml > "$stage/DEBIAN/conffiles"
@@ -77,6 +79,28 @@ CONTROL
 cat > "$stage/DEBIAN/postinst" <<'POSTINST'
 #!/bin/sh
 set -e
+if [ "$1" = configure ]; then
+	# The user and the state directory, before anything runs as garner.
+	if command -v systemd-sysusers >/dev/null; then
+		systemd-sysusers garner.conf
+	elif ! getent passwd garner >/dev/null; then
+		adduser --system --group --home /var/lib/garner --no-create-home garner
+	fi
+	if [ -L /var/lib/garner ] && [ -d /var/lib/private/garner ]; then
+		# Left by a version with DynamicUser=yes: a link to
+		# /var/lib/private/garner, owned by the old dynamic UID. Move it
+		# back and give it to garner; systemd would move it but not chown
+		# it. The restart below picks it up.
+		rm /var/lib/garner
+		mv /var/lib/private/garner /var/lib/garner
+		chown -R garner:garner /var/lib/garner
+		chmod 0750 /var/lib/garner
+	elif command -v systemd-tmpfiles >/dev/null; then
+		systemd-tmpfiles --create garner.conf
+	else
+		install -d -m 0750 -o garner -g garner /var/lib/garner
+	fi
+fi
 if [ "$1" = configure ] && [ -d /run/systemd/system ]; then
 	systemctl --system daemon-reload >/dev/null || true
 	if [ -n "$2" ]; then
