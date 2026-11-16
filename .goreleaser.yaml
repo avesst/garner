@@ -39,6 +39,7 @@ nfpms:
     vendor: garner
     maintainer: garner maintainers <garner@localhost>
     homepage: https://github.com/avesst/garner
+    license: 0BSD
     description: |-
       Internal deb and rpm package repository
       garner serves signed apt and dnf repositories from uploads and from
@@ -62,6 +63,13 @@ nfpms:
         dst: /usr/share/man/man1/garner.1.gz
       - src: build/man/garner.yaml.5.gz
         dst: /usr/share/man/man5/garner.yaml.5.gz
+      - src: LICENSE
+        dst: /usr/share/doc/garner/copyright
+        packager: deb
+      - src: LICENSE
+        dst: /usr/share/licenses/garner/LICENSE
+        type: license
+        packager: rpm
     scripts:
       postinstall: packaging/postinstall.sh
       preremove: packaging/preremove.sh

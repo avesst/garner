@@ -116,3 +116,7 @@ or `v1.3.0-rc.1`: CI builds and tests the packages and attaches them, with
 between tags get the next patch version as a pre-release, for example
 `1.2.4-dev.<commit time>+<hash>` from `just packages` (`1.2.4~dev...` in package
 versions, so it sorts before 1.2.4), and Go's pseudo-version from `just build`.
+
+## License
+
+0BSD; see [LICENSE](LICENSE).

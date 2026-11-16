@@ -58,7 +58,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. Not yet tested under a running systemd |
 | Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
-| License | Before the first public release | Open |
+| License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve
 
