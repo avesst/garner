@@ -140,10 +140,31 @@ func setCache(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del("If-Modified-Since")
 }
 
+// Timeouts of the HTTP servers. Without IdleTimeout and ReadTimeout,
+// net/http never closes an idle keep-alive connection nor one that stops
+// sending its body. Uploads extend their read deadline as data arrives
+// (uploadIdleTimeout), so ReadTimeout does not limit their total time.
+// Writes have no timeout: package downloads can take long.
+var (
+	readHeaderTimeout = 30 * time.Second
+	readTimeout       = time.Minute
+	idleTimeout       = 2 * time.Minute
+	uploadIdleTimeout = time.Minute
+)
+
+// NewHTTPServer is an http.Server for h with garner's timeouts.
+func NewHTTPServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout: readTimeout, IdleTimeout: idleTimeout}
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	code int
 }
+
+// Unwrap lets http.ResponseController reach the connection.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (r *statusRecorder) WriteHeader(code int) {
 	r.code = code

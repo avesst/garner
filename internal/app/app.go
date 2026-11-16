@@ -328,12 +328,12 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 		a.Log.Info("current snapshot is up to date")
 	}
 
-	srv := &http.Server{Addr: cfg.Server.Listen, Handler: a.Server().Handler(), ReadHeaderTimeout: 30 * time.Second}
+	srv := server.NewHTTPServer(cfg.Server.Listen, a.Server().Handler())
 	servers := []*http.Server{srv}
 	if cfg.Metrics.Listen != "" {
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", a.Metrics.Handler())
-		servers = append(servers, &http.Server{Addr: cfg.Metrics.Listen, Handler: mux, ReadHeaderTimeout: 30 * time.Second})
+		servers = append(servers, server.NewHTTPServer(cfg.Metrics.Listen, mux))
 	}
 	// Under systemd, listeners stored by the previous run of the service
 	// are reused, so connections queue during a restart (sdnotify.Listen).

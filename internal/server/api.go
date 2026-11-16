@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/avesst/garner/internal/auth"
 	"github.com/avesst/garner/internal/format"
@@ -67,7 +69,13 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		targets[key] = r.URL.Query().Get(key)
 		configured[key] = fm.Distributions(cfg)
 	}
-	body := http.MaxBytesReader(w, r.Body, int64(cfg.Server.MaxUploadSize))
+	// A slow upload may take longer than ReadTimeout; a stalled one is cut
+	// off after uploadIdleTimeout without data.
+	rc := http.NewResponseController(w)
+	progress := &deadlineReader{r: r.Body, extend: func() {
+		rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout)) // unsupported in tests' recorders
+	}}
+	body := http.MaxBytesReader(w, progress, int64(cfg.Server.MaxUploadSize))
 	counter := &countingReader{r: body}
 	res, err := s.Ingester.Ingest(r.Context(), counter, ingest.Request{
 		Targets: targets, Owner: t.Owner, Origin: "upload",
@@ -101,6 +109,20 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, UploadResponse{Package: pj, Existing: res.Existing})
 	}
 }
+
+// deadlineReader calls extend before every read, so the read deadline
+// moves with the data.
+type deadlineReader struct {
+	r      io.ReadCloser
+	extend func()
+}
+
+func (d *deadlineReader) Read(p []byte) (int, error) {
+	d.extend()
+	return d.r.Read(p)
+}
+
+func (d *deadlineReader) Close() error { return d.r.Close() }
 
 type countingReader struct {
 	r interface{ Read([]byte) (int, error) }
