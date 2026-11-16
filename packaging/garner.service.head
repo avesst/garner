@@ -1,0 +1,8 @@
+# garner, installed by the garner package. Before the first start:
+# 1. Set server.public_url in /etc/garner/garner.yaml.
+# 2. Run init as the garner user; it prints the admin token:
+#      sudo -u garner garner init
+# 3. systemctl enable --now garner
+# rpm support needs createrepo_c, rpmsign and gpg, which the package
+# recommends.
+

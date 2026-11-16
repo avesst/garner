@@ -27,6 +27,24 @@ jobs:
           if grep -- '--- SKIP' tool-tests.log; then exit 1; fi
       - run: just build
 
+  # garner's own .deb and .rpm, built as a release builds them and
+  # installed in Debian, Ubuntu, AlmaLinux and Fedora containers.
+  packages:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the snapshot version counts from the last tag
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.19.0 # goreleaser_version in the justfile
+          args: release --snapshot --clean --skip=publish
+      - run: GARNER_PACKAGES="$PWD/dist" go test -tags e2e -count=1 -v -run TestPackages ./e2e
+
   # The MVP runs on SQLite only; this keeps the schema portable to
   # PostgreSQL for multi-node support later (design section 18).
   migrations-postgres:

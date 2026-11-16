@@ -1,0 +1,92 @@
+# garner's release build: the static binary, as .deb and .rpm packages for
+# amd64. A semver tag (v1.2.3, v1.3.0-rc.1) gives a draft GitHub release;
+# `just packages` builds a snapshot into dist/ without publishing.
+version: 2
+project_name: garner
+
+before:
+  hooks:
+    - mkdir -p build/man
+    - sh -c 'gzip -9n < docs/garner.1 > build/man/garner.1.gz'
+    - sh -c 'gzip -9n < docs/garner.yaml.5 > build/man/garner.yaml.5.gz'
+    # The contrib unit describes a manual install from /usr/local/bin.
+    - sh -c "{ cat packaging/garner.service.head; sed '1,/^$/d; s|/usr/local/bin/garner|/usr/bin/garner|g' contrib/garner.service; } > build/garner.service"
+
+builds:
+  - id: garner
+    main: ./cmd/garner
+    binary: garner
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    # Reproducible: the same commit gives the same binary.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# The bare static binary, besides the packages; no tarballs.
+archives:
+  - formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+nfpms:
+  - id: packages
+    package_name: garner
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    vendor: garner
+    maintainer: garner maintainers <garner@localhost>
+    homepage: https://github.com/avesst/garner
+    description: |-
+      Internal deb and rpm package repository
+      garner serves signed apt and dnf repositories from uploads and from
+      releases synced from GitHub, GitLab and Forgejo/Gitea. createrepo_c,
+      rpmsign and gpg are needed for rpm support only.
+    section: admin
+    priority: optional
+    file_name_template: "{{ .ConventionalFileName }}"
+    contents:
+      - src: build/garner.service
+        dst: /usr/lib/systemd/system/garner.service
+      - src: contrib/garner.sysusers
+        dst: /usr/lib/sysusers.d/garner.conf
+      - src: contrib/garner.tmpfiles
+        dst: /usr/lib/tmpfiles.d/garner.conf
+      # Local edits survive upgrades (dpkg conffile, rpm %config(noreplace)).
+      - src: contrib/garner.yaml
+        dst: /etc/garner/garner.yaml
+        type: config|noreplace
+      - src: build/man/garner.1.gz
+        dst: /usr/share/man/man1/garner.1.gz
+      - src: build/man/garner.yaml.5.gz
+        dst: /usr/share/man/man5/garner.yaml.5.gz
+    scripts:
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+      postremove: packaging/postremove.sh
+    overrides:
+      deb:
+        recommends: [createrepo-c, rpm, gpg, gpgconf]
+      rpm:
+        recommends: [createrepo_c, rpm-sign, gnupg2]
+
+checksum:
+  # A name garner's own sync recognises as a checksum file.
+  name_template: checksums.txt
+
+# Builds between tags: the next patch version as a semver pre-release,
+# ordered by commit time, so package managers sort them correctly.
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev.{{ .CommitTimestamp }}+{{ .ShortCommit }}"
+
+release:
+  draft: true
+  replace_existing_draft: true
+  # v1.3.0-rc.1 and the like are marked as pre-releases.
+  prerelease: auto
+
+changelog:
+  use: git
+  sort: asc

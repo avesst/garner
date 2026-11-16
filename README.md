@@ -33,14 +33,16 @@ snapshot, so clients never see a half-written repository.
 
 ## Install
 
-Build the binary or a Debian package:
+Releases on GitHub carry `.deb` and `.rpm` packages for amd64. To build them
+or the binary yourself:
 
 ```sh
 just build          # bin/garner
-just deb            # bin/garner_<version>_<arch>.deb; GOARCH=arm64 just deb for arm64
+just packages       # dist/garner_<version>_amd64.deb and dist/garner-<version>-1.x86_64.rpm
 ```
 
-The package installs the binary, a systemd unit, a system user and an example
+`just packages` needs [GoReleaser](https://goreleaser.com) on `PATH`. The
+packages install the binary, a systemd unit, a system user and an example
 configuration at `/etc/garner/garner.yaml`. A container image is built from
 the `Dockerfile`.
 
@@ -105,4 +107,12 @@ lists every command.
 ```sh
 just check          # gofmt, go vet and unit tests, as CI runs them
 just e2e            # real apt and dnf clients in containers; needs Docker
+just test-packages  # install dist/ packages in containers; needs Docker
 ```
+
+Versions are [semver](https://semver.org). A release is a tag such as `v1.2.3`
+or `v1.3.0-rc.1`: CI builds and tests the packages and attaches them, with
+`checksums.txt`, to a draft GitHub release, which is published by hand. Builds
+between tags get the next patch version as a pre-release, for example
+`1.2.4-dev.<commit time>+<hash>` from `just packages` (`1.2.4~dev...` in package
+versions, so it sorts before 1.2.4), and Go's pseudo-version from `just build`.

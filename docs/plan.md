@@ -39,8 +39,8 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
   tested against TLS test servers that mimic their APIs, not against real
   instances.
 - Step 5: metrics, health endpoints, container image, systemd unit example.
-  Done. A `.deb` of garner itself is built with `just deb`; an `.rpm` is
-  not done (see the decisions below).
+  Done. `.deb` and `.rpm` packages of garner itself are built with
+  GoReleaser (see the decisions below).
 
 ## Not verified yet
 
@@ -56,7 +56,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
 | rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools; rpm packages stay stored and come back when the tools do |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
-| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | `.deb` built with `dpkg-deb` (`just deb`), tested in a Debian 13 systemd container; `.rpm` open |
+| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. Not yet tested under a running systemd |
 | Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
 | License | Before the first public release | Open |
 

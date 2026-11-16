@@ -1,0 +1,63 @@
+name: release
+
+# A semver tag (v1.2.3, v1.3.0-rc.1) builds the .deb and .rpm, installs
+# them in containers, and attaches them with checksums.txt to a draft
+# GitHub release, published by hand. Other tags starting with v are
+# ignored.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  semver:
+    runs-on: ubuntu-24.04
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - id: check
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # semver.org's grammar with a leading v.
+          n='(0|[1-9][0-9]*)'
+          id='(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)'
+          re="^v$n\.$n\.$n(-$id(\.$id)*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?\$"
+          if printf '%s\n' "$TAG" | grep -Eq "$re"; then
+            echo ok=true >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG is not a semver tag; no release"
+            echo ok=false >> "$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: semver
+    if: needs.semver.outputs.ok == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the draft release
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the changelog and the previous tag
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends just rpm
+      - run: just check
+      # Build and test the packages before anything is published.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.19.0
+          args: release --clean --skip=publish
+      - run: GARNER_PACKAGES="$PWD/dist" go test -tags e2e -count=1 -v -run TestPackages ./e2e
+      # The same build again, now published: the builds are reproducible.
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: v2.19.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
