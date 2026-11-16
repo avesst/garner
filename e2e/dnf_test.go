@@ -28,7 +28,10 @@ type containerEnv struct {
 	t     *testing.T
 	dir   string
 	url   string
+	addr  string
 	token string
+	name  string // container name of the running server
+	user  string // uid:gid the containers run as
 }
 
 func buildImage(t *testing.T) {
@@ -52,7 +55,33 @@ func newContainerEnv(t *testing.T) *containerEnv {
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	e := &containerEnv{t: t, dir: dir, url: "http://" + addr}
+	e := &containerEnv{t: t, dir: dir, url: "http://" + addr, addr: addr,
+		name: "garner-e2e-" + filepath.Base(dir), user: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())}
+	e.writeConfig("")
+	out, err := exec.Command("docker", "run", "--rm", "--user", e.user, "-v", dir+":/data:z", imageTag,
+		"init", "--config", "/data/garner.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("garner init: %v\n%s", err, out)
+	}
+	m := regexp.MustCompile(`GARNER_TOKEN=admin:(\S+)`).FindSubmatch(out)
+	if m == nil {
+		t.Fatalf("no token in init output:\n%s", out)
+	}
+	e.token = string(m[1])
+	t.Cleanup(func() {
+		if t.Failed() {
+			logs, _ := exec.Command("docker", "logs", e.name).CombinedOutput()
+			t.Logf("garner logs:\n%s", logs)
+		}
+		exec.Command("docker", "rm", "-f", e.name).Run()
+	})
+	e.start()
+	return e
+}
+
+// writeConfig writes garner.yaml with extra appended at the top level.
+func (e *containerEnv) writeConfig(extra string) {
+	e.t.Helper()
 	cfg := fmt.Sprintf(`server:
   listen: %s
   public_url: %s
@@ -67,49 +96,47 @@ deb:
 rpm:
   architectures: [x86_64]
   releases: [stable]
-`, addr, e.url)
-	if err := os.WriteFile(filepath.Join(dir, "garner.yaml"), []byte(cfg), 0o644); err != nil {
-		t.Fatal(err)
+%s`, e.addr, e.url, extra)
+	if err := os.WriteFile(filepath.Join(e.dir, "garner.yaml"), []byte(cfg), 0o644); err != nil {
+		e.t.Fatal(err)
 	}
-	user := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	out, err := exec.Command("docker", "run", "--rm", "--user", user, "-v", dir+":/data:z", imageTag,
-		"init", "--config", "/data/garner.yaml").CombinedOutput()
-	if err != nil {
-		t.Fatalf("garner init: %v\n%s", err, out)
-	}
-	m := regexp.MustCompile(`GARNER_TOKEN=admin:(\S+)`).FindSubmatch(out)
-	if m == nil {
-		t.Fatalf("no token in init output:\n%s", out)
-	}
-	e.token = string(m[1])
+}
 
-	name := "garner-e2e-" + filepath.Base(dir)
-	out, err = exec.Command("docker", "run", "-d", "--name", name, "--user", user, "--network", "host",
-		"-v", dir+":/data:z", imageTag, "serve", "--config", "/data/garner.yaml").CombinedOutput()
-	if err != nil {
-		t.Fatalf("garner serve: %v\n%s", err, out)
+// start runs garner serve in the background and waits for /readyz. args
+// go to docker run before the image, for example "-e", "PATH=...".
+func (e *containerEnv) start(args ...string) {
+	e.t.Helper()
+	run := []string{"run", "-d", "--name", e.name, "--user", e.user, "--network", "host", "-v", e.dir + ":/data:z"}
+	run = append(append(run, args...), imageTag, "serve", "--config", "/data/garner.yaml")
+	if out, err := exec.Command("docker", run...).CombinedOutput(); err != nil {
+		e.t.Fatalf("garner serve: %v\n%s", err, out)
 	}
-	t.Cleanup(func() {
-		if t.Failed() {
-			logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
-			t.Logf("garner logs:\n%s", logs)
-		}
-		exec.Command("docker", "rm", "-f", name).Run()
-	})
 	for i := 0; ; i++ {
 		resp, err := http.Get(e.url + "/readyz")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				break
+				return
 			}
 		}
 		if i > 100 {
-			t.Fatalf("garner did not become ready: %v", err)
+			logs, _ := exec.Command("docker", "logs", e.name).CombinedOutput()
+			e.t.Fatalf("garner did not become ready: %v\n%s", err, logs)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return e
+}
+
+// restart stops the server and starts it again with args (see start).
+func (e *containerEnv) restart(args ...string) {
+	e.t.Helper()
+	if out, err := exec.Command("docker", "stop", "-t", "30", e.name).CombinedOutput(); err != nil {
+		e.t.Fatalf("docker stop: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("docker", "rm", e.name).CombinedOutput(); err != nil {
+		e.t.Fatalf("docker rm: %v\n%s", err, out)
+	}
+	e.start(args...)
 }
 
 func (e *containerEnv) api(method, path string, body []byte) []byte {
