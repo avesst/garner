@@ -81,8 +81,8 @@ nfpms:
         recommends: [createrepo_c, rpm-sign, gnupg2]
 
 checksum:
-  # A name garner's own sync recognises as a checksum file.
-  name_template: checksums.txt
+  # The distributions' name, for sha256sum -c; garner's sync knows it too.
+  name_template: SHA256SUMS
 
 # Builds between tags: the next patch version as a semver pre-release,
 # ordered by commit time, so package managers sort them correctly.

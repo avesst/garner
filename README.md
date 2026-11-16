@@ -117,7 +117,7 @@ just test-packages  # install dist/ packages in containers; needs Docker
 
 Versions are [semver](https://semver.org). A release is a tag such as `v1.2.3`
 or `v1.3.0-rc.1`: CI builds and tests the packages and attaches them, with
-`checksums.txt`, to a draft GitHub release, which is published by hand. Builds
+`SHA256SUMS`, to a draft GitHub release, which is published by hand. Builds
 between tags get the next patch version as a pre-release, for example
 `1.2.4-dev.<commit time>+<hash>` from `just packages` (`1.2.4~dev...` in package
 versions, so it sorts before 1.2.4), and Go's pseudo-version from `just build`.

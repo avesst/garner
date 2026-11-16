@@ -1,7 +1,7 @@
 name: release
 
 # A semver tag (v1.2.3, v1.3.0-rc.1) builds the .deb and .rpm, installs
-# them in containers, and attaches them with checksums.txt to a draft
+# them in containers, and attaches them with SHA256SUMS to a draft
 # GitHub release, published by hand. Other tags starting with v are
 # ignored.
 on:
