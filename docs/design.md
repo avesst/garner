@@ -660,7 +660,10 @@ says which tools are missing.
   Otherwise they get `403`. A loopback request that carries
   `X-Forwarded-Proto` comes from a proxy on the same host, so that header
   must say `https` too. `allow_insecure_auth: true` disables the check for
-  isolated labs.
+  isolated labs. The CLI likewise sends a token only over https or to
+  loopback, unless `GARNER_INSECURE_AUTH=1` is set, so a mistyped
+  `http://` URL does not put the token on the network before the server
+  refuses it.
 - Only `X-Forwarded-*` headers from trusted proxies are honoured.
 
 ## 12. Storage and database

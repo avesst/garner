@@ -167,6 +167,14 @@ as printed by
 .B garner init
 and
 .BR "garner token create" .
+It is sent only over https or to a loopback address.
+.TP
+.B GARNER_INSECURE_AUTH
+Set to
+.B 1
+to send the token over plain http to any address, for isolated lab
+networks; the server must allow it with
+.BR server.allow_insecure_auth .
 .SH FILES
 .TP
 .I /etc/garner/garner.yaml

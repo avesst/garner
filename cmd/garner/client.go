@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,6 +40,20 @@ func newClient(base string) (*client, error) {
 	return c, nil
 }
 
+// secureTransport reports whether credentials sent to u stay off the
+// network in clear: https, or plain http to loopback (design section 11).
+func secureTransport(u *url.URL) bool {
+	if u.Scheme == "https" {
+		return true
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // do sends a request and decodes a JSON response into out. Errors carry
 // the server's message.
 func (c *client) do(method, path string, query url.Values, body io.Reader, out any) error {
@@ -51,6 +66,10 @@ func (c *client) do(method, path string, query url.Values, body io.Reader, out a
 		return err
 	}
 	if c.secret != "" {
+		if !secureTransport(req.URL) && os.Getenv("GARNER_INSECURE_AUTH") != "1" {
+			return fmt.Errorf("refusing to send the token in clear text to %s; use https, "+
+				"or set GARNER_INSECURE_AUTH=1 on an isolated network", req.URL.Host)
+		}
 		req.SetBasicAuth(c.name, c.secret)
 	}
 	if body != nil && method != http.MethodPut {
