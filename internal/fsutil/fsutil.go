@@ -86,6 +86,40 @@ func copyFile(src, dst string) error {
 	return os.Rename(tmp, dst)
 }
 
+// DirSync collects the directories that LinkOrCopy adds entries to, so a
+// caller can make many new links durable with one fsync per directory.
+type DirSync struct {
+	dirs map[string]bool
+}
+
+// LinkOrCopy is LinkOrCopy that records the directory dst goes in and the
+// parent of every directory it creates. An existing dst adds nothing.
+func (s *DirSync) LinkOrCopy(src, dst string) error {
+	if _, err := os.Lstat(dst); err != nil {
+		if s.dirs == nil {
+			s.dirs = map[string]bool{}
+		}
+		for dir := filepath.Dir(dst); ; dir = filepath.Dir(dir) {
+			s.dirs[dir] = true
+			if _, err := os.Stat(dir); err == nil || dir == filepath.Dir(dir) {
+				break
+			}
+		}
+	}
+	return LinkOrCopy(src, dst)
+}
+
+// Sync fsyncs every recorded directory and forgets them.
+func (s *DirSync) Sync() error {
+	for dir := range s.dirs {
+		if err := SyncDir(dir); err != nil {
+			return err
+		}
+	}
+	s.dirs = nil
+	return nil
+}
+
 // Symlink creates or atomically replaces a symlink: it creates the new link
 // beside the old one and renames it into place.
 func Symlink(target, path string) error {

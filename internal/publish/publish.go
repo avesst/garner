@@ -358,8 +358,11 @@ func (p *Publisher) history(ctx context.Context, cfg *config.Config) ([]string, 
 	return out, nil
 }
 
-// linkPool hardlinks each package's served blob to its pool path.
+// linkPool hardlinks each package's served blob to its pool path. The new
+// entries are fsynced before it returns: indexes that list them become
+// current with the swap, and nothing would recreate a lost link.
 func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
+	var dirs fsutil.DirSync
 	for _, pk := range pkgs {
 		src, err := p.Blobs.Path(pk.ServedSHA256())
 		if err != nil {
@@ -370,9 +373,12 @@ func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
 			return fmt.Errorf("pool: path %q of %s leaves the pool directory", rel, pk.Name)
 		}
 		dst := filepath.Join(p.poolDir(fm.Name()), rel)
-		if err := fsutil.LinkOrCopy(src, dst); err != nil {
+		if err := dirs.LinkOrCopy(src, dst); err != nil {
 			return fmt.Errorf("pool: %w", err)
 		}
+	}
+	if err := dirs.Sync(); err != nil {
+		return fmt.Errorf("pool: %w", err)
 	}
 	return nil
 }
