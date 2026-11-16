@@ -10,8 +10,8 @@ land.
 - Go module path: `github.com/avesst/garner`. A move means one rewrite of the
   import paths; acceptable while garner is an application, not a library.
 - Go: 1.26 (`go 1.26` in `go.mod`).
-- CI: Forgejo Actions. Its workflow syntax is GitHub Actions compatible, so a
-  move to GitHub keeps the workflows.
+- CI: GitHub Actions (`.github/workflows/ci.yml`): `just check` and the build,
+  `just e2e`, and the migrations applied to PostgreSQL.
 - Integration tests run real clients in containers (Docker locally and in CI).
 
 ## MVP step 1, as slices
@@ -43,7 +43,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 
 ## Not verified yet
 
-- CI has not run on Forgejo. `just e2e` needs Docker and runs only locally.
+- CI has not run on GitHub Actions yet.
 - No sync against a real Forgejo, GitLab or GitHub Enterprise Server, and
   none against GitHub with a token or an organization.
 - The systemd unit example is checked with `systemd-analyze verify` only.

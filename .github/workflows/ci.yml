@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          # Latest patch release of the go.mod version, not its .0.
+          go-version: "1.26"
+          check-latest: true
+      # The image has dpkg and gpg; rpm is added so that no comparison
+      # against a real tool is skipped.
+      - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends just rpm
+      - run: just check
+      - name: Fail on tests skipped for a missing tool
+        run: |
+          go test -count=1 -v ./internal/deb ./internal/rpm ./internal/signing > tool-tests.log
+          if grep -- '--- SKIP' tool-tests.log; then exit 1; fi
+      - run: just build
+
+  # Real apt and dnf clients in containers, against garner in-process and
+  # from its container image.
+  e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+      - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends just
+      - run: just e2e
+
+  # The MVP runs on SQLite only; this keeps the schema portable to
+  # PostgreSQL for multi-node support later (design section 18).
+  migrations-postgres:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: test
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./scripts/check-migrations-postgres.sh
