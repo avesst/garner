@@ -13,6 +13,9 @@ import (
 type Scheduler struct {
 	Delay   time.Duration
 	Publish func(context.Context) error
+	// RetryMin and RetryMax bound the backoff after a failed Publish,
+	// which doubles from RetryMin up to RetryMax (defaults 30s and 10m).
+	RetryMin, RetryMax time.Duration
 
 	mu      sync.Mutex
 	pending bool
@@ -41,6 +44,14 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 	wake := s.wake
 	s.mu.Unlock()
+	retryMin, retryMax := s.RetryMin, s.RetryMax
+	if retryMin <= 0 {
+		retryMin = 30 * time.Second
+	}
+	if retryMax < retryMin {
+		retryMax = max(10*time.Minute, retryMin)
+	}
+	var backoff time.Duration
 	for {
 		select {
 		case <-ctx.Done():
@@ -56,9 +67,22 @@ func (s *Scheduler) Run(ctx context.Context) {
 		run := s.pending
 		s.pending = false
 		s.mu.Unlock()
-		if run {
-			// Errors are logged by Publish; a later request retries.
-			s.Publish(ctx)
+		if !run {
+			continue
 		}
+		// Publish logs its errors. A failure is retried with backoff, so a
+		// transient error does not leave changes unpublished until some
+		// unrelated request; requests meanwhile join the retry.
+		if err := s.Publish(ctx); err == nil || ctx.Err() != nil {
+			backoff = 0
+			continue
+		}
+		backoff = min(max(2*backoff, retryMin), retryMax)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		s.Request()
 	}
 }

@@ -79,7 +79,8 @@ PostgreSQL come later (section 18).
   another process holds it.
 - Ingest records a package in the database and requests a publish. Publish
   requests are debounced (default 10 s) so a burst of uploads yields one
-  publish.
+  publish. A failed publish is retried with backoff (30 s, doubling to
+  10 min), so a transient error does not leave changes unpublished.
 - Under systemd, garner runs as `Type=notify`: it reports readiness after
   its first publish and keeps its listening sockets in systemd's file
   descriptor store. On a restart the socket stays open, so requests wait
