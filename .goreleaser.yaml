@@ -95,6 +95,17 @@ release:
   # v1.3.0-rc.1 and the like are marked as pre-releases.
   prerelease: auto
 
+# Release notes: commits since the previous tag in git order, grouped by
+# their Conventional Commits type. Edit the draft before publishing.
 changelog:
   use: git
-  sort: asc
+  abbrev: 7
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other changes
+      order: 2
