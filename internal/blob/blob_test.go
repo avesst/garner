@@ -37,6 +37,10 @@ func TestPutAndOpen(t *testing.T) {
 	if want := filepath.Join("sha256", b.SHA256[:2], b.SHA256); !strings.HasSuffix(f.Name(), want) {
 		t.Errorf("path %s does not end in %s", f.Name(), want)
 	}
+	// Pool entries are hardlinks to the blob and share its mode.
+	if st, err := f.Stat(); err != nil || st.Mode().Perm() != 0o644 {
+		t.Errorf("blob mode = %v, %v; want 0644", st.Mode().Perm(), err)
+	}
 }
 
 func TestPutTwiceIsNoOp(t *testing.T) {

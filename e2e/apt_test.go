@@ -4,6 +4,8 @@ package e2e
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -73,5 +75,36 @@ apt-cache policy garner-hello
 				t.Errorf("second update did not see %s:\n%s", version, out)
 			}
 		})
+	}
+}
+
+// contrib/garner.tmpfiles makes the state directory 0750 so a reverse
+// proxy in the garner group can serve public/ from disk. The proxy must
+// then be able to read the packages, not only the indexes.
+func TestPublicReadableByGroup(t *testing.T) {
+	e := newEnv(t, "")
+	e.upload(debtest.Build("garner-hello", "1.0", "amd64", "hello 1.0"), "suite=stable")
+	e.publish()
+	if err := os.Chmod(e.dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// Run as root only to find the files, then read them as an
+	// unprivileged user whose only group is the directory's group.
+	cmd := exec.Command("docker", "run", "--rm", "-v", e.dir+":/data:ro,z", "debian:trixie", "sh", "-ec", `
+gid=$(stat -c %g /data)
+as_proxy() { setpriv --reuid=65534 --regid="$gid" --clear-groups "$@"; }
+inrelease=$(find -L /data/public/current/ -name InRelease | head -n1)
+deb=$(find -L /data/public/current/ -name '*.deb' | head -n1)
+test -n "$inrelease" && test -n "$deb"
+ls -lL "$inrelease" "$deb"
+as_proxy cat "$inrelease" >/dev/null && echo "proxy reads InRelease"
+as_proxy cat "$deb" >/dev/null && echo "proxy reads the .deb"
+`)
+	out, err := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "proxy reads InRelease") {
+		t.Fatalf("setup problem, the proxy cannot even read InRelease: %v\n%s", err, out)
+	}
+	if err != nil || !strings.Contains(string(out), "proxy reads the .deb") {
+		t.Fatalf("a proxy in the garner group cannot read published packages: %v\n%s", err, out)
 	}
 }
