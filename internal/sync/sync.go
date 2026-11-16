@@ -438,7 +438,7 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 
 	matched := false
 	var errs []error
-	for _, rel := range candidates {
+	for i, rel := range candidates {
 		seen, err := q.SeenRelease(ctx, r.src.Name, repo, rel.ID)
 		if err != nil {
 			return matched, err
@@ -455,6 +455,13 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 			// Leave it unseen so the next poll retries; keep the old ETag
 			// so the listing is fetched again.
 			return matched, errors.Join(errs...)
+		}
+		if !had && err == nil && i == len(candidates)-1 {
+			// The newest release has no candidate assets yet: many CI
+			// pipelines publish a release and attach assets afterwards.
+			// Leave it unseen, so a later poll picks them up, until a
+			// newer release replaces it.
+			continue
 		}
 		if err := q.MarkSeen(ctx, r.src.Name, repo, rel.Tag, rel.ID, rel.PublishedAt); err != nil {
 			return matched, err

@@ -589,3 +589,49 @@ func TestPermanentDownloadFailureIsSkipped(t *testing.T) {
 		})
 	}
 }
+
+// A release seen before its assets are attached gets them on a later poll,
+// on a source's first run as well as later ones.
+func TestAssetsAttachedAfterPublishing(t *testing.T) {
+	for _, firstRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("first run %v", firstRun), func(t *testing.T) {
+			f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+			if !firstRun {
+				r0 := f.release("org/tool", "0", 1)
+				f.forge.add(r0, "tool_0.1_amd64.deb", debtest.Build("tool", "0.1", "amd64", "0"))
+				f.sync()
+			}
+			f.release("org/tool", "1", 2)
+			if st := f.sync(); st.LastError != "" {
+				t.Fatalf("poll without assets: %q", st.LastError)
+			}
+			r1 := &f.forge.releases["org/tool"][0]
+			f.forge.add(r1, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+			f.sync()
+			if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 1.0") {
+				t.Errorf("placed %q, want the late asset of release 1", got)
+			}
+		})
+	}
+}
+
+// Only the newest release waits for assets: a newer one ends the wait, so
+// a repository that never attaches assets keeps no backlog.
+func TestNewerReleaseEndsWaitForAssets(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	r0 := f.release("org/tool", "0", 1)
+	f.forge.add(r0, "tool_0.1_amd64.deb", debtest.Build("tool", "0.1", "amd64", "0"))
+	f.sync()
+	f.release("org/tool", "1", 2)
+	f.sync()
+	r2 := f.release("org/tool", "2", 3)
+	f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+	f.sync()
+	seen, err := f.st.SeenRelease(context.Background(), "tool", "org/tool", "1")
+	if err != nil || !seen {
+		t.Errorf("release 1 seen = %v, %v; want it marked once release 2 was processed", seen, err)
+	}
+	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 2.0") {
+		t.Errorf("placed %q, want release 2", got)
+	}
+}

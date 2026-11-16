@@ -472,6 +472,10 @@ not trusted.
   not compared as versions, because many are not (`nightly`,
   `2024-05-release`). `seen_releases` keeps a release from being processed
   twice, also when its timestamp is edited.
+- The newest release is not marked processed while it has no candidate
+  assets, because many CI pipelines publish a release and attach assets
+  afterwards. A newer release ends the wait. Assets added to a release that
+  already had candidates are not picked up.
 - If upstream deletes a release, the packages stay; retention handles them.
 - A failed download leaves the release for the next run, except one that
   cannot succeed: HTTP 404 or 410, or an asset larger than
