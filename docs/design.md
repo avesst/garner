@@ -478,9 +478,11 @@ not trusted.
   already had candidates are not picked up.
 - If upstream deletes a release, the packages stay; retention handles them.
 - A failed download leaves the release for the next run, except one that
-  cannot succeed: HTTP 404 or 410, or an asset larger than
-  `server.max_upload_size`. That asset is skipped and a `download` conflict
-  is recorded; for a checksum file, the whole release is skipped, since its
+  cannot succeed: HTTP 404 or 410 from the forge's own origin, or an asset
+  larger than `server.max_upload_size`. A 404 from a link outside the
+  origin was fetched without the token and may only mean the repository is
+  private, so it is retried. For a skipped asset a `download` conflict is
+  recorded; for a checksum file, the whole release is skipped, since its
   assets cannot be verified.
 - An asset rejected for its content (invalid package, content or ownership
   conflict) does not hold the release back. Any other ingest failure (disk,

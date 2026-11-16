@@ -257,4 +257,17 @@ func TestDownloadStatusError(t *testing.T) {
 			t.Errorf("%s: Permanent() = %v, want %v", p, se.Permanent(), want)
 		}
 	}
+
+	// The same 404 from outside the forge's origin was fetched without the
+	// token, so it may only mean "private": not permanent.
+	other := httptest.NewTLSServer(http.NotFoundHandler())
+	defer other.Close()
+	_, err = c.Download(context.Background(), Asset{Name: "x", URL: other.URL + "/x"})
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != 404 || !se.External {
+		t.Fatalf("external download: err = %v, want an external 404", err)
+	}
+	if se.Permanent() {
+		t.Error("an unauthenticated 404 from outside the forge counts as permanent")
+	}
 }

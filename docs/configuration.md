@@ -136,6 +136,9 @@ A list of forges that sources sync from. There are none by default.
 
 The token is sent only to the forge's own scheme, host and port. Asset links
 that point elsewhere are fetched without it.
+For a private repository, set `url` to the address the forge puts in its
+asset links (Forgejo's `ROOT_URL`, GitLab's `external_url`); otherwise the
+downloads fail without the token and are retried on every poll.
 
 ## `sources`
 

@@ -359,8 +359,11 @@ func (e *StatusError) Error() string {
 }
 
 // Permanent reports whether the asset is gone, so a retry cannot succeed.
+// A 404 without credentials is not proof of that: a private repository
+// answers it to anyone without the token, for example when asset links
+// name the forge's public address and url its internal one.
 func (e *StatusError) Permanent() bool {
-	return e.Code == http.StatusNotFound || e.Code == http.StatusGone
+	return !e.External && (e.Code == http.StatusNotFound || e.Code == http.StatusGone)
 }
 
 // api builds an API URL; path must already be escaped.

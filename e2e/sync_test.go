@@ -167,3 +167,43 @@ func TestSyncRetriesTransientIngestFailure(t *testing.T) {
 		t.Fatalf("package lost after a transient ingest failure (asset downloads: %d):\n%s", f.downloadCount(), out)
 	}
 }
+
+// An asset link outside the configured forge origin is
+// fetched without the token, and a private repository answers 404. That
+// 404 says nothing about the asset, so it must not mark the release seen:
+// once the operator fixes the forge url, the package must arrive.
+func TestSyncRetriesUnauthenticated404(t *testing.T) {
+	f := newFakeForgejo(t)
+	dir := t.TempDir()
+	e := newEnv(t, f.config(t, dir, f.api.URL))
+	m := startSync(t, e)
+
+	runSync(t, e, m)
+	if n := f.downloadCount(); n != 1 {
+		t.Fatalf("first sync downloaded the asset %d times, want 1", n)
+	}
+
+	// The operator sets url to the forge's public address, which asset
+	// links use, and reloads.
+	cfgPath := filepath.Join(e.dir, "garner.yaml")
+	cfg, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = []byte(strings.Replace(string(cfg), "url: "+f.api.URL, "url: "+f.root.URL, 1))
+	if err := os.WriteFile(cfgPath, cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.app.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restart(); err != nil {
+		t.Fatal(err)
+	}
+
+	runSync(t, e, m)
+	e.publish()
+	if out, ok := aptInstalls(e, "garner-tool", "tool 1.0"); !ok {
+		t.Fatalf("package never fetched after an unauthenticated 404 (asset downloads: %d):\n%s", f.downloadCount(), out)
+	}
+}
