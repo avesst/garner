@@ -4,7 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"os/exec"
@@ -164,6 +166,51 @@ func TestReadControlTarLimit(t *testing.T) {
 	if _, err := Read(bytes.NewReader(deb)); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("err = %v, want a size limit error", err)
 	}
+}
+
+func TestReadXZDictLimit(t *testing.T) {
+	good := compress(t, ".xz", controlTar(t, "./control", testControl))
+	huge := xzDict(t, good, 38) // 2 GiB, which the decoder would allocate
+	tests := []struct {
+		name string
+		data []byte
+		want string // empty: accepted
+	}{
+		{"64 MiB", xzDict(t, good, 28), ""},
+		{"2 GiB", huge, "dictionary"},
+		{"4 GiB", xzDict(t, good, 40), "dictionary"},
+		// The walk must reach headers after the first one.
+		{"second stream", append(append(bytes.Clone(good), 0, 0, 0, 0), huge...), "dictionary"},
+		{"truncated", good[:len(good)-5], "truncated"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Read(bytes.NewReader(buildDeb(t, debMember{"control.tar.xz", tt.data})))
+			if tt.want == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// xzDict returns a copy of the single-block xz stream data with the
+// dictionary size property of its block header set to p, and the header
+// CRC32 fixed so the decoder would accept it.
+func xzDict(t *testing.T, data []byte, p byte) []byte {
+	t.Helper()
+	x := bytes.Clone(data)
+	size := (int(x[12]) + 1) * 4
+	h := x[12 : 12+size]
+	i := bytes.Index(h, []byte{0x21, 0x01})
+	if i < 0 {
+		t.Fatal("no LZMA2 filter in block header")
+	}
+	h[i+2] = p
+	binary.LittleEndian.PutUint32(h[size-4:], crc32.ChecksumIEEE(h[:size-4]))
+	return x
 }
 
 type zeros struct{}

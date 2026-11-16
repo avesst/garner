@@ -153,7 +153,17 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 		defer zr.Close()
 		dr = zr
 	case ".xz":
-		xr, err := xz.NewReader(r)
+		data, err := io.ReadAll(io.LimitReader(r, maxXZControl+1))
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > maxXZControl {
+			return nil, fmt.Errorf("control.tar.xz exceeds %d bytes", maxXZControl)
+		}
+		if err := checkXZ(data); err != nil {
+			return nil, fmt.Errorf("control.tar.xz: %w", err)
+		}
+		xr, err := xz.NewReader(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("control.tar.xz: %w", err)
 		}
