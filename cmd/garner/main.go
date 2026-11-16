@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/avesst/garner/internal/config"
 )
@@ -94,15 +95,17 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// versionString prefers the version set at link time, then the module
-// version, which go build derives from git (a pseudo-version between tags).
+// versionString prefers the version set at link time (release builds),
+// then the module version, which go build derives from git: the tag, or a
+// semver pseudo-version between tags. Both are semver; the leading "v" of
+// the module version is dropped so they print alike.
 func versionString() string {
 	if version != "" {
 		return version
 	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if v := info.Main.Version; v != "" && v != "(devel)" {
-			return v
+			return strings.TrimPrefix(v, "v")
 		}
 	}
 	return "devel"

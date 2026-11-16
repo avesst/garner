@@ -1,7 +1,5 @@
 # garner build and check recipes; `just --list` shows them.
 
-version := `git describe --tags --always --dirty 2>/dev/null || echo devel`
-
 # List recipes.
 default:
     @just --list --unsorted --justfile {{justfile()}}
@@ -29,9 +27,10 @@ test:
 e2e:
     go test -tags e2e -count=1 -v ./e2e
 
-# Static binary: no cgo, so it runs on any Linux distribution.
+# Static binary: no cgo, so it runs on any Linux distribution. go build
+# stamps the version from git: the tag, or a semver pseudo-version.
 build:
-    CGO_ENABLED=0 go build -trimpath -ldflags '-s -w -X main.version={{version}}' -o bin/garner ./cmd/garner
+    CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o bin/garner ./cmd/garner
 
 # Debian package of garner in bin/; GOARCH=arm64 just deb for arm64.
 deb:
