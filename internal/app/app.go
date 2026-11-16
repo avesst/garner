@@ -50,8 +50,11 @@ type App struct {
 	Publisher *publish.Publisher
 	Scheduler *publish.Scheduler
 	Metrics   *metrics.Registry
-	Log       *slog.Logger
-	Version   string
+	// Resigner runs resignIfNeeded, one run at a time, after the start
+	// and after reloads.
+	Resigner *publish.Scheduler
+	Log      *slog.Logger
+	Version  string
 
 	// Syncer is set by the sync package when sources are configured.
 	Syncer server.Syncer
@@ -162,6 +165,7 @@ func Open(ctx context.Context, configPath, version string, extra ...format.Forma
 		ConfigCommit: a.ConfigCommit, Version: version, Build: build, Root: cfg.Storage.Path, Log: log,
 	}
 	a.Scheduler.Publish = a.publishAndCollect
+	a.Resigner = &publish.Scheduler{Publish: a.resignIfNeeded}
 	a.registerMetrics()
 	if err := a.Publisher.Reconcile(ctx); err != nil {
 		return nil, err
@@ -224,9 +228,7 @@ func (a *App) Reload() error {
 		if err != nil {
 			return fmt.Errorf("signing key: %w", err)
 		}
-		if old := a.keys.Swap(keys); old.Fingerprint() != keys.Fingerprint() {
-			go a.resign()
-		}
+		a.keys.Store(keys)
 		return nil
 	})
 	if err != nil {
@@ -239,20 +241,39 @@ func (a *App) Reload() error {
 		fn(cfg)
 	}
 	// Suites, architectures, keys and the landing page may have changed.
+	a.Resigner.Request()
 	a.Scheduler.Request()
 	return nil
 }
 
-// resign re-signs packages after the signing key changed, then publishes.
-func (a *App) resign() {
-	a.Log.Info("signing key changed; re-signing packages", "fingerprint", a.Signer().Fingerprint())
-	n, err := a.Ingester.Resign(context.Background())
+// resignIfNeeded re-signs packages when the signing key differs from
+// the one they were last signed with: after a reload or a restart with a
+// new key, or after a re-sign that did not finish. Then it publishes.
+func (a *App) resignIfNeeded(ctx context.Context) error {
+	fp := a.Signer().Fingerprint()
+	prev, err := a.Store.SignedWith(ctx)
+	if err != nil {
+		a.Log.Error("cannot read which key packages are signed with", "err", err)
+		return err
+	}
+	if prev == fp {
+		return nil
+	}
+	a.Log.Info("signing key changed; re-signing packages", "fingerprint", fp, "previous", prev)
+	n, err := a.Ingester.Resign(ctx)
 	if err != nil {
 		a.Log.Error("re-signing failed", "err", err, "done", n)
-	} else {
-		a.Log.Info("re-signed packages", "count", n)
+		return err
 	}
-	a.Scheduler.Request()
+	a.Log.Info("re-signed packages", "count", n)
+	if err := a.Store.SetSignedWith(ctx, fp); err != nil {
+		a.Log.Error("cannot record the signing key", "err", err)
+		return err
+	}
+	if n > 0 {
+		a.Scheduler.Request()
+	}
+	return nil
 }
 
 func (a *App) publishAndCollect(ctx context.Context) error {
@@ -353,6 +374,8 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 		go func() { defer wg.Done(); fn(ctx) }()
 	}
 	run(a.Scheduler.Run)
+	run(a.Resigner.Run)
+	a.Resigner.Request() // the key may have changed while garner was stopped
 	run(a.gcLoop)
 	for _, fn := range background {
 		run(fn)

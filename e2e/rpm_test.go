@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/avesst/garner/internal/signing"
 )
 
 // rpmFixture is the x86_64 test package, version 3:2.0-1.
@@ -62,9 +64,22 @@ func (e *containerEnv) waitPublish(prev string) {
 	}
 }
 
-// garner starts once without the rpm tools, so rpm is
-// disabled, and then with them again. The rpm packages must still be
-// there: a missing tool is not a request to delete a format's packages.
+// waitLog reports whether the server's log contains substr within d.
+func (e *containerEnv) waitLog(substr string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		logs, _ := exec.Command("docker", "logs", e.name).CombinedOutput()
+		if strings.Contains(string(logs), substr) {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
+}
+
+// garner starts once without the rpm tools, so rpm is disabled, and then
+// with them again. The rpm packages must still be there: a missing tool
+// is not a request to delete a format's packages.
 func TestRpmSurvivesStartWithoutTools(t *testing.T) {
 	e := newContainerEnv(t)
 	e.uploadRPM()
@@ -87,5 +102,44 @@ func TestRpmSurvivesStartWithoutTools(t *testing.T) {
 	e.waitPublish(prev)
 	if out, err := e.dnfInstall(); err != nil || !strings.Contains(out, "hello 2.0") {
 		t.Fatalf("rpm packages gone after one start without the rpm tools: %v\n%s", err, out)
+	}
+}
+
+// The documented key rotation done with restarts instead
+// of SIGHUP, as a GitOps rollout does it. After the new key is promoted,
+// the served rpms must carry its signature.
+func TestRpmResignedAfterKeyPromotionAndRestart(t *testing.T) {
+	e := newContainerEnv(t)
+	e.uploadRPM()
+	e.api(http.MethodPost, "/api/v1/publish", nil)
+	oldID := e.keyID(t)
+
+	fp, err := signing.Generate(filepath.Join(e.dir, "signing", "new.asc"), "e2e repository new", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID := strings.ToLower(fp[len(fp)-16:])
+
+	// Step 1: add the new key second.
+	e.writeConfig("signing:\n  keys:\n    - key_file: /data/signing/key.asc\n    - key_file: /data/signing/new.asc\n")
+	prev := e.current()
+	e.restart()
+	e.waitPublish(prev)
+
+	// Step 3: move the new key first.
+	e.writeConfig("signing:\n  keys:\n    - key_file: /data/signing/new.asc\n    - key_file: /data/signing/key.asc\n")
+	e.restart()
+	if !e.waitLog("re-signed packages", 60*time.Second) {
+		logs, _ := exec.Command("docker", "logs", e.name).CombinedOutput()
+		t.Fatalf("no re-sign after promoting the new key and restarting:\n%s", logs)
+	}
+	e.api(http.MethodPost, "/api/v1/publish", nil)
+
+	out, err := e.dnfInstall()
+	if err != nil {
+		t.Fatalf("dnf failed after the key promotion: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Key ID "+newID) {
+		t.Fatalf("rpm still signed by the old key %s, want the new key %s:\n%s", oldID, newID, out)
 	}
 }

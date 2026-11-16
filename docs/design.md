@@ -365,7 +365,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `repositories` | `id`, `name` | One row (`default`) in the MVP. Every other table references it, so named repositories can be added without a data migration. |
+| `repositories` | `id`, `name`, `signed_with` | One row (`default`) in the MVP. `signed_with` is the fingerprint of the key packages were last re-signed with. Every other table references it, so named repositories can be added without a data migration. |
 | `blobs` | `sha256` PK, `size`, `created_at` | Originals and re-signed variants. |
 | `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
 | `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `created_at` | Where a package is published. |
@@ -632,7 +632,9 @@ says which tools are missing.
 
   apt `InRelease` can carry both signatures during the overlap. rpm packages
   carry one signature, so promoting a new key re-signs all rpm packages from
-  their originals.
+  their originals. garner compares the signing key with the one recorded
+  after the last re-sign at every start and reload, so a promotion takes
+  effect through a restart too, and an interrupted re-sign is redone.
 - rpm packages are re-signed with `rpmsign --addsign` (the container image
   ships `rpm-sign`). The original blob is kept, so packages can be re-signed
   after key rotation. Upstream checksums are verified before re-signing.

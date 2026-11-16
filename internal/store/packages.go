@@ -261,3 +261,17 @@ func (q *Queries) SignedPackages(ctx context.Context, formatName string) ([]*for
 	}
 	return out, rows.Err()
 }
+
+// SignedWith returns the fingerprint of the key packages were last
+// re-signed with, or "" if that is unknown.
+func (q *Queries) SignedWith(ctx context.Context) (string, error) {
+	var fp string
+	err := q.q.QueryRowContext(ctx, `SELECT signed_with FROM repositories WHERE id = ?`, RepositoryID).Scan(&fp)
+	return fp, err
+}
+
+// SetSignedWith records that every package is signed with fingerprint.
+func (q *Queries) SetSignedWith(ctx context.Context, fingerprint string) error {
+	_, err := q.q.ExecContext(ctx, `UPDATE repositories SET signed_with = ? WHERE id = ?`, fingerprint, RepositoryID)
+	return err
+}
