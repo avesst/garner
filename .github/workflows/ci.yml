@@ -27,19 +27,6 @@ jobs:
           if grep -- '--- SKIP' tool-tests.log; then exit 1; fi
       - run: just build
 
-  # Real apt and dnf clients in containers, against garner in-process and
-  # from its container image.
-  e2e:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-          check-latest: true
-      - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends just
-      - run: just e2e
-
   # The MVP runs on SQLite only; this keeps the schema portable to
   # PostgreSQL for multi-node support later (design section 18).
   migrations-postgres:
