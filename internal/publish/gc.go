@@ -2,6 +2,7 @@ package publish
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -89,11 +90,11 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 	}
 
 	for _, sha := range gone {
-		path, err := p.Blobs.Path(sha)
+		removed, err := p.removeBlob(ctx, sha)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		if err := os.Remove(path); err == nil {
+		if removed {
 			res.Blobs++
 		}
 	}
@@ -109,14 +110,30 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		info, err := d.Info()
 		return err == nil && now.Sub(info.ModTime()) > grace
 	}
+	var orphans []string
 	n, err := sweep(filepath.Join(p.Root, "blobs", "sha256"), func(path string, d fs.DirEntry) bool {
-		_, ok := known[d.Name()]
-		return !ok && !live[d.Name()] && old(d)
+		if _, ok := known[d.Name()]; ok || live[d.Name()] || !old(d) {
+			return false
+		}
+		if _, err := p.Blobs.Path(d.Name()); err != nil {
+			return true // not a blob
+		}
+		orphans = append(orphans, d.Name())
+		return false
 	})
 	if err != nil {
 		return nil, err
 	}
 	res.Blobs += n
+	for _, sha := range orphans {
+		removed, err := p.removeBlob(ctx, sha)
+		if err != nil {
+			return nil, err
+		}
+		if removed {
+			res.Blobs++
+		}
+	}
 	for _, dir := range []string{filepath.Join(p.Root, "blobs", "tmp"), filepath.Join(p.Root, "tmp")} {
 		n, err := sweep(dir, func(path string, d fs.DirEntry) bool { return old(d) })
 		if err != nil {
@@ -137,6 +154,31 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 	p.Log.Info("gc finished", "snapshots", len(res.Snapshots), "blobs", res.Blobs,
 		"pool_files", res.PoolFiles, "temp_files", res.TempFiles)
 	return res, nil
+}
+
+// removeBlob deletes the row and file of a blob that no package references.
+// It reports false, keeping both, when an upload has added a package with
+// this content since the blob was found unreferenced. The upload restores
+// the file if it was removed first (store.RemoveBlob, store.AddBlob).
+func (p *Publisher) removeBlob(ctx context.Context, sha string) (bool, error) {
+	path, err := p.Blobs.Path(sha)
+	if err != nil {
+		return false, err
+	}
+	removed := false
+	err = p.Store.Tx(ctx, func(q *store.Queries) error {
+		removed = false
+		_, err := q.RemoveBlob(ctx, sha, func() error {
+			err := os.Remove(path)
+			removed = err == nil
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		})
+		return err
+	})
+	return removed && err == nil, err
 }
 
 // sweep removes the regular files below root for which remove returns

@@ -16,10 +16,20 @@ const (
 	Removed = "removed"
 )
 
-// AddBlob records a blob; recording an existing one is a no-op.
+// AddBlob records a blob and takes its row lock until the transaction
+// ends. The caller must then make sure the file exists (blob.Store.Ensure):
+// RemoveBlob, which takes the same lock, may have deleted it after Put
+// found it present.
 func (q *Queries) AddBlob(ctx context.Context, sha string, size int64) error {
+	return q.lockBlob(ctx, sha, size)
+}
+
+// lockBlob creates the blob's row if it is missing, and locks it: an
+// upsert that updates an existing row takes its row lock on PostgreSQL,
+// and any write takes the database lock on SQLite.
+func (q *Queries) lockBlob(ctx context.Context, sha string, size int64) error {
 	_, err := q.q.ExecContext(ctx, `INSERT INTO blobs (sha256, size, created_at) VALUES (?, ?, ?)
-		ON CONFLICT (sha256) DO NOTHING`, sha, size, Now())
+		ON CONFLICT (sha256) DO UPDATE SET size = blobs.size`, sha, size, Now())
 	return err
 }
 

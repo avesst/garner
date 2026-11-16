@@ -151,8 +151,10 @@ func (q *Queries) Blobs(ctx context.Context) (map[string]string, error) {
 }
 
 // DeleteUnreferencedPackages removes packages that are in no snapshot and
-// whose placements are all removed, then blob rows nothing references. It
-// returns the deleted blobs' sha256s.
+// whose placements are all removed. It returns the sha256s of the blobs no
+// package references any more. Their rows stay: a blob's row and file go
+// together in RemoveBlob's transaction, so an upload of the same content
+// in the meantime keeps them.
 func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, error) {
 	if _, err := q.q.ExecContext(ctx, `DELETE FROM placements WHERE package_id IN (
 		SELECT p.id FROM packages p
@@ -171,23 +173,36 @@ func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, err
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var gone []string
 	for rows.Next() {
 		var sha string
 		if err := rows.Scan(&sha); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		gone = append(gone, sha)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+	return gone, rows.Err()
+}
+
+// RemoveBlob deletes the row of a blob no package references, and calls
+// remove, which deletes its file, before the transaction commits. It
+// reports false, and leaves row and file alone, when a package references
+// the blob. It first takes the blob's row lock, which AddBlob also takes,
+// so it waits for an upload that is adding a package with this content.
+// Call it inside a transaction.
+func (q *Queries) RemoveBlob(ctx context.Context, sha string, remove func() error) (bool, error) {
+	if err := q.lockBlob(ctx, sha, 0); err != nil {
+		return false, err
 	}
-	for _, sha := range gone {
-		if _, err := q.q.ExecContext(ctx, `DELETE FROM blobs WHERE sha256 = ?`, sha); err != nil {
-			return nil, err
-		}
+	var referenced bool
+	err := q.q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM packages
+		WHERE blob_sha256 = ? OR signed_blob_sha256 = ?)`, sha, sha).Scan(&referenced)
+	if err != nil || referenced {
+		return false, err
 	}
-	return gone, nil
+	if _, err := q.q.ExecContext(ctx, `DELETE FROM blobs WHERE sha256 = ?`, sha); err != nil {
+		return false, err
+	}
+	return true, remove()
 }

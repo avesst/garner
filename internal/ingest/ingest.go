@@ -105,11 +105,7 @@ func SourceOwner(source string) string { return "source:" + source }
 // Ingest stores the file read from r and records it.
 func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Result, error) {
 	cfg := in.Config()
-	b, err := in.Blobs.Put(r)
-	if err != nil {
-		return nil, err
-	}
-	f, err := in.Blobs.Open(b.SHA256)
+	b, f, err := in.Blobs.PutOpen(r)
 	if err != nil {
 		return nil, err
 	}
@@ -147,15 +143,24 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
-	var signed *blob.Blob
+	var signed *prepared
+	defer func() { signed.close() }()
+	prepare := func() (err error) {
+		// Prepare reads the blob by name; GC may have removed it.
+		if err := in.Blobs.Ensure(b.SHA256, f, b.Size); err != nil {
+			return err
+		}
+		signed, err = in.prepare(ctx, fm, b.SHA256)
+		return err
+	}
 	if existing == nil {
-		if signed, err = in.prepare(ctx, fm, b.SHA256); err != nil {
+		if err := prepare(); err != nil {
 			return nil, err
 		}
 	}
 
 	res := &Result{Distribution: dist}
-	err = in.Store.Tx(ctx, func(q *store.Queries) error {
+	tx := func(q *store.Queries) error {
 		res.Existing, res.Conflict, res.State = false, "", ""
 		variants, err := q.PlacedVariants(ctx, ident, dist)
 		if err != nil {
@@ -193,7 +198,10 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 
 		pkg, err := q.FindPackage(ctx, ident, b.SHA256)
 		if errors.Is(err, store.ErrNotFound) {
-			if pkg, err = in.insert(ctx, q, fm, parsed, b, signed, req); err != nil {
+			if existing != nil {
+				return errPackageGone
+			}
+			if pkg, err = in.insert(ctx, q, fm, parsed, b, f, signed, req); err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -204,7 +212,17 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		}
 		res.Package, res.State = pkg, state
 		return nil
-	})
+	}
+	err = in.Store.Tx(ctx, tx)
+	if errors.Is(err, errPackageGone) {
+		// GC deleted the package found above, which skipped re-signing:
+		// prepare it as new content and try once more.
+		existing = nil
+		if err := prepare(); err != nil {
+			return nil, err
+		}
+		err = in.Store.Tx(ctx, tx)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -216,9 +234,18 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 	return res, nil
 }
 
+// errPackageGone means a package found before the transaction was deleted
+// by GC before it started.
+var errPackageGone = errors.New("package deleted during ingest")
+
+// insert records a new package. Each blob is recorded under its row lock
+// and then restored if GC removed its file since Put (store.AddBlob).
 func (in *Ingester) insert(ctx context.Context, q *store.Queries, fm format.Format, parsed *format.Parsed,
-	b blob.Blob, signed *blob.Blob, req Request) (*format.Package, error) {
+	b blob.Blob, f *os.File, signed *prepared, req Request) (*format.Package, error) {
 	if err := q.AddBlob(ctx, b.SHA256, b.Size); err != nil {
+		return nil, err
+	}
+	if err := in.Blobs.Ensure(b.SHA256, f, b.Size); err != nil {
 		return nil, err
 	}
 	pkg := &format.Package{
@@ -229,7 +256,7 @@ func (in *Ingester) insert(ctx context.Context, q *store.Queries, fm format.Form
 		CreatedAt: store.Now(),
 	}
 	if signed != nil {
-		if err := q.AddBlob(ctx, signed.SHA256, signed.Size); err != nil {
+		if err := signed.record(ctx, q, in.Blobs); err != nil {
 			return nil, err
 		}
 		pkg.SignedSHA256 = signed.SHA256
@@ -248,8 +275,31 @@ func (in *Ingester) insert(ctx context.Context, q *store.Queries, fm format.Form
 	return pkg, nil
 }
 
-// prepare runs the format's Prepare and stores its output as a blob.
-func (in *Ingester) prepare(ctx context.Context, fm format.Format, sha string) (*blob.Blob, error) {
+// prepared is a blob written by a format's Prepare. Its file stays open,
+// so the blob can be restored if GC removes it before it is recorded.
+type prepared struct {
+	blob.Blob
+	f *os.File
+}
+
+func (p *prepared) close() {
+	if p != nil {
+		p.f.Close()
+	}
+}
+
+// record records the blob under its row lock and restores its file if GC
+// removed it (store.AddBlob).
+func (p *prepared) record(ctx context.Context, q *store.Queries, blobs *blob.Store) error {
+	if err := q.AddBlob(ctx, p.SHA256, p.Size); err != nil {
+		return err
+	}
+	return blobs.Ensure(p.SHA256, p.f, p.Size)
+}
+
+// prepare runs the format's Prepare and stores its output as a blob. It
+// returns nil when the format leaves the package as it is.
+func (in *Ingester) prepare(ctx context.Context, fm format.Format, sha string) (*prepared, error) {
 	orig, err := in.Blobs.Path(sha)
 	if err != nil {
 		return nil, err
@@ -271,11 +321,11 @@ func (in *Ingester) prepare(ctx context.Context, fm format.Format, sha string) (
 		return nil, err
 	}
 	defer f.Close()
-	b, err := in.Blobs.Put(f)
+	b, bf, err := in.Blobs.PutOpen(f)
 	if err != nil {
 		return nil, err
 	}
-	return &b, nil
+	return &prepared{Blob: b, f: bf}, nil
 }
 
 // checkOwner applies section 8. It returns a non-empty explanation when
@@ -349,14 +399,16 @@ func (in *Ingester) Resign(ctx context.Context) (int, error) {
 				return n, fmt.Errorf("%s %s: %w", fm.Name(), p.Name, err)
 			}
 			if signed == nil || signed.SHA256 == p.SignedSHA256 {
+				signed.close()
 				continue
 			}
 			err = in.Store.Tx(ctx, func(q *store.Queries) error {
-				if err := q.AddBlob(ctx, signed.SHA256, signed.Size); err != nil {
+				if err := signed.record(ctx, q, in.Blobs); err != nil {
 					return err
 				}
 				return q.SetSignedBlob(ctx, p.ID, signed.SHA256)
 			})
+			signed.close()
 			if err != nil {
 				return n, err
 			}

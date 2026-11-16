@@ -43,9 +43,20 @@ func Open(root string) (*Store, error) {
 // visible under its hash, and storing content that is already present
 // leaves the existing file untouched.
 func (s *Store) Put(r io.Reader) (Blob, error) {
+	b, f, err := s.PutOpen(r)
+	if f != nil {
+		f.Close()
+	}
+	return b, err
+}
+
+// PutOpen is Put that also returns the content opened for reading. The
+// file stays readable after GC removes the blob, so it can restore it
+// (Ensure).
+func (s *Store) PutOpen(r io.Reader) (Blob, *os.File, error) {
 	tmp, err := os.CreateTemp(filepath.Join(s.root, "tmp"), "put-*")
 	if err != nil {
-		return Blob{}, err
+		return Blob{}, nil, err
 	}
 	defer os.Remove(tmp.Name()) // a no-op once the blob is linked in place
 
@@ -58,28 +69,59 @@ func (s *Store) Put(r io.Reader) (Blob, error) {
 		err = cerr
 	}
 	if err != nil {
-		return Blob{}, fmt.Errorf("write blob: %w", err)
+		return Blob{}, nil, fmt.Errorf("write blob: %w", err)
 	}
 	b := Blob{SHA256: hex.EncodeToString(h.Sum(nil)), Size: size}
+	f, err := os.Open(tmp.Name())
+	if err != nil {
+		return Blob{}, nil, err
+	}
+	if err := s.link(tmp.Name(), &b); err != nil {
+		f.Close()
+		return Blob{}, nil, err
+	}
+	return b, f, nil
+}
 
+// link moves the finished temp file into place as blob b.
+func (s *Store) link(tmp string, b *Blob) error {
 	final := s.path(b.SHA256)
 	dir := filepath.Dir(final)
 	if err := s.mkdir(dir); err != nil {
-		return Blob{}, err
+		return err
 	}
 	// Link, unlike rename, fails when the target exists, so an existing
 	// blob (and any pool hardlinks to it) keeps its inode.
-	switch err := os.Link(tmp.Name(), final); {
+	switch err := os.Link(tmp, final); {
 	case errors.Is(err, fs.ErrExist):
 		b.Existed = true
-		return b, nil
+		return nil
 	case err != nil:
-		return Blob{}, fmt.Errorf("store blob: %w", err)
+		return fmt.Errorf("store blob: %w", err)
 	}
-	if err := syncDir(dir); err != nil {
-		return Blob{}, err
+	return syncDir(dir)
+}
+
+// Ensure stores the blob again from src, which holds its size bytes, when
+// its file is missing. Ingest calls it in the transaction that records the
+// blob, because GC may have removed the file after Put found it present.
+// src can be a file opened before the removal: it stays readable.
+func (s *Store) Ensure(sha string, src io.ReaderAt, size int64) error {
+	p, err := s.Path(sha)
+	if err != nil {
+		return err
 	}
-	return b, nil
+	if _, err := os.Stat(p); !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	b, err := s.Put(io.NewSectionReader(src, 0, size))
+	if err != nil {
+		return err
+	}
+	if b.SHA256 != sha {
+		return fmt.Errorf("restore blob %s: got content %s", sha, b.SHA256)
+	}
+	return nil
 }
 
 // Path returns the file name of the blob with the given sha256, or an

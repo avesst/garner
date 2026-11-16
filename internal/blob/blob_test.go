@@ -113,3 +113,34 @@ func assertTmpEmpty(t *testing.T, s *Store) {
 		t.Errorf("tmp/ has %d entries, %v; want none", len(entries), err)
 	}
 }
+
+func TestEnsureRestoresFromOpenFile(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, f, err := s.PutOpen(strings.NewReader("content"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	path, _ := s.Path(b.SHA256)
+	if err := os.Remove(path); err != nil { // as GC would
+		t.Fatal(err)
+	}
+	if err := s.Ensure(b.SHA256, f, b.Size); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "content" {
+		t.Errorf("restored blob = %q, %v", got, err)
+	}
+	// Present: left alone. Wrong content: refused.
+	if err := s.Ensure(b.SHA256, strings.NewReader("other"), 5); err != nil {
+		t.Errorf("Ensure of a present blob: %v", err)
+	}
+	os.Remove(path)
+	if err := s.Ensure(b.SHA256, strings.NewReader("other"), 5); err == nil {
+		t.Error("Ensure stored content with another hash")
+	}
+}
