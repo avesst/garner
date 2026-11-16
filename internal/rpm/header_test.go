@@ -2,6 +2,7 @@ package rpm
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"strings"
 	"testing"
@@ -63,4 +64,74 @@ func TestReadHeaderInvalid(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
 		}
 	}
+}
+
+func TestReadHeaderFieldCharacters(t *testing.T) {
+	valid := map[int32]string{tagName: "garner-hello", tagVersion: "1.0", tagRelease: "1",
+		tagArch: "noarch", tagSourceRPM: "garner-hello-1.0-1.src.rpm"}
+	tests := []struct {
+		name  string
+		tag   int32
+		value string
+		want  string // empty: accepted
+	}{
+		{"valid", tagName, "garner-hello", ""},
+		{"name with plus and underscore", tagName, "_lib+plus.x", ""},
+		{"version with tilde and caret", tagVersion, "1.0~rc1^git2", ""},
+		{"release with dist tag", tagRelease, "1.el9_3", ""},
+		{"name with slash", tagName, "../../../tmp/evil", "invalid package name"},
+		{"name starting with dot", tagName, ".hidden", "invalid package name"},
+		{"name with space", tagName, "a b", "invalid package name"},
+		{"name with macro", tagName, "%{name}", "invalid package name"},
+		{"version with slash", tagVersion, "1/../../x", "invalid version"},
+		{"version with dash", tagVersion, "1.0-1", "invalid version"},
+		{"version with dot dot", tagVersion, "1..0", "invalid version"},
+		{"release with newline", tagRelease, "1\nx", "invalid release"},
+		{"release with slash", tagRelease, "1/x", "invalid release"},
+		{"arch with slash", tagArch, "../x", "invalid architecture"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tags := map[int32]string{}
+			for k, v := range valid {
+				tags[k] = v
+			}
+			tags[tt.tag] = tt.value
+			_, err := ReadHeader(bytes.NewReader(fakeRPM(tags)))
+			if tt.want == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// fakeRPM returns a binary rpm with an empty signature header and a main
+// header holding the given string tags.
+func fakeRPM(tags map[int32]string) []byte {
+	var b bytes.Buffer
+	lead := make([]byte, 96)
+	copy(lead, leadMagic)
+	b.Write(lead)
+	header := func(index, data []byte) {
+		b.Write(headerMagic)
+		b.Write(make([]byte, 4))
+		binary.Write(&b, binary.BigEndian, uint32(len(index)/16))
+		binary.Write(&b, binary.BigEndian, uint32(len(data)))
+		b.Write(index)
+		b.Write(data)
+	}
+	header(nil, nil) // 16 bytes, so no padding follows
+	var index, data []byte
+	for tag, v := range tags {
+		index = binary.BigEndian.AppendUint32(index, uint32(tag))
+		index = binary.BigEndian.AppendUint32(index, typeString)
+		index = binary.BigEndian.AppendUint32(index, uint32(len(data)))
+		index = binary.BigEndian.AppendUint32(index, 1)
+		data = append(append(data, v...), 0)
+	}
+	header(index, data)
+	return b.Bytes()
 }

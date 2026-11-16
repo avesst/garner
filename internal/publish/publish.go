@@ -365,7 +365,11 @@ func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
 		if err != nil {
 			return err
 		}
-		dst := filepath.Join(p.poolDir(fm.Name()), filepath.FromSlash(fm.PoolPath(pk)))
+		rel := filepath.FromSlash(fm.PoolPath(pk))
+		if !filepath.IsLocal(rel) {
+			return fmt.Errorf("pool: path %q of %s leaves the pool directory", rel, pk.Name)
+		}
+		dst := filepath.Join(p.poolDir(fm.Name()), rel)
 		if err := fsutil.LinkOrCopy(src, dst); err != nil {
 			return fmt.Errorf("pool: %w", err)
 		}

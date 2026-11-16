@@ -428,3 +428,18 @@ func TestClientFilePerSuite(t *testing.T) {
 		t.Errorf("public/clients after dropping suites: %v", err)
 	}
 }
+
+// escapingFormat returns a pool path outside the pool, as a format whose
+// parser let a hostile field through would.
+type escapingFormat struct{ deb.Format }
+
+func (escapingFormat) PoolPath(*format.Package) string { return "../../escape.deb" }
+
+func TestLinkPoolStaysInPool(t *testing.T) {
+	f := newFixture(t)
+	pkg := &format.Package{Name: "tool", BlobSHA256: strings.Repeat("ab", 32)}
+	err := f.pub.linkPool(escapingFormat{}, []*format.Package{pkg})
+	if err == nil || !strings.Contains(err.Error(), "leaves the pool") {
+		t.Errorf("err = %v, want a pool path error", err)
+	}
+}

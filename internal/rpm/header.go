@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
 )
 
 // Header tags garner reads.
@@ -36,6 +38,16 @@ var (
 // make garner allocate without limit. Real headers with large file lists
 // are tens of MiB.
 const maxHeader = 128 << 20
+
+// The characters rpmbuild accepts in these fields, without its macro
+// characters %{}: a built package has its macros expanded, and repodata
+// would read % as a URL escape. Without '/', a field cannot climb out of
+// the pool directory when it becomes part of a pool path.
+var (
+	nameRE   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._+-]*$`)
+	verRelRE = regexp.MustCompile(`^[A-Za-z0-9._+~^]+$`)
+	archRE   = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+)
 
 // Package is what garner reads from an rpm header.
 type Package struct {
@@ -86,6 +98,14 @@ func ReadHeader(r io.Reader) (*Package, error) {
 	switch {
 	case p.Name == "" || p.Version == "" || p.Release == "" || p.Arch == "":
 		return nil, errors.New("rpm header lacks name, version, release or arch")
+	case !nameRE.MatchString(p.Name):
+		return nil, fmt.Errorf("invalid package name %q", p.Name)
+	case !verRelRE.MatchString(p.Version) || strings.Contains(p.Version, ".."):
+		return nil, fmt.Errorf("invalid version %q", p.Version)
+	case !verRelRE.MatchString(p.Release) || strings.Contains(p.Release, ".."):
+		return nil, fmt.Errorf("invalid release %q", p.Release)
+	case !archRE.MatchString(p.Arch):
+		return nil, fmt.Errorf("invalid architecture %q", p.Arch)
 	case p.SourceRPM == "":
 		return nil, errors.New("source rpms are not accepted")
 	case p.Epoch < 0:
