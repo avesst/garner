@@ -77,7 +77,7 @@ func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, e
 	}
 	b, ok := f.files[a.URL]
 	if !ok {
-		return nil, errors.New("404")
+		return nil, &forge.StatusError{URL: a.URL, Code: 404}
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
@@ -509,5 +509,83 @@ func TestSkipsBeforeDownload(t *testing.T) {
 	}
 	if got := strings.Join(f.placed(), "; "); got != "tool 1.0 stable active unverified" {
 		t.Errorf("placed %q", got)
+	}
+}
+
+// downloadsOf counts the downloads of an asset name.
+func (f *fixture) downloadsOf(name string) int {
+	f.forge.mu.Lock()
+	defer f.forge.mu.Unlock()
+	n := 0
+	for _, d := range f.forge.downloads {
+		if d == name {
+			n++
+		}
+	}
+	return n
+}
+
+// conflictKinds returns "kind package" for every open conflict.
+func (f *fixture) conflictKinds() []string {
+	f.t.Helper()
+	cs, err := f.st.Conflicts(context.Background(), false)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Kind+" "+c.PackageRef)
+	}
+	return out
+}
+
+// A download that cannot succeed is skipped with a conflict instead of
+// being retried on every poll, which held up every newer release.
+func TestPermanentDownloadFailureIsSkipped(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(f *fixture, rel *forge.Release)
+		want  string // in LastError
+	}{
+		{"too large", func(f *fixture, rel *forge.Release) {
+			big := debtest.Build("tool", "1.0", "amd64", strings.Repeat("x", 4096))
+			f.cfg.Server.MaxUploadSize = config.ByteSize(len(big) - 1)
+			f.forge.add(rel, "tool_1.0_amd64.deb", big)
+		}, "larger than server.max_upload_size"},
+		{"gone", func(f *fixture, rel *forge.Release) {
+			a := f.forge.add(rel, "tool_1.0_amd64.deb", nil)
+			delete(f.forge.files, a.URL)
+		}, "HTTP 404"},
+		{"checksum file gone", func(f *fixture, rel *forge.Release) {
+			f.forge.add(rel, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+			a := f.forge.add(rel, "SHA256SUMS", nil)
+			delete(f.forge.files, a.URL)
+		}, "SHA256SUMS: download"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+			r0 := f.release("org/tool", "0", 1)
+			f.forge.add(r0, "tool_0.1_amd64.deb", debtest.Build("tool", "0.1", "amd64", "0"))
+			f.sync()
+			tt.setup(f, f.release("org/tool", "1", 2))
+			r2 := f.release("org/tool", "2", 3)
+			f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+
+			if st := f.sync(); !strings.Contains(st.LastError, tt.want) {
+				t.Errorf("LastError = %q, want it to mention %q", st.LastError, tt.want)
+			}
+			f.sync()
+			got := strings.Join(f.placed(), "; ")
+			if !strings.Contains(got, "tool 2.0") || strings.Contains(got, "tool 1.0") {
+				t.Errorf("placed %q, want 2.0 and not 1.0", got)
+			}
+			if n := f.downloadsOf("tool_1.0_amd64.deb") + f.downloadsOf("SHA256SUMS"); n != 1 {
+				t.Errorf("failing asset fetched %d times over two polls, want 1", n)
+			}
+			if c := f.conflictKinds(); len(c) != 1 || !strings.HasPrefix(c[0], "download tool/org/tool@v1/") {
+				t.Errorf("conflicts = %v, want one download conflict for v1", c)
+			}
+		})
 	}
 }

@@ -496,6 +496,13 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 
 	sums, err := r.checksums(ctx, rel, tmp)
 	if err != nil {
+		var ce *checksumError
+		if errors.As(err, &ce) && permanent(err) {
+			// The assets cannot be verified: skip the release rather
+			// than retry it on every poll or take them unverified.
+			r.conflict("download", repo, rel, ce.name, err.Error())
+			return true, false, err
+		}
 		return true, true, err
 	}
 	settings := r.cfg.Settings(r.src)
@@ -504,7 +511,15 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 	for _, a := range cands {
 		da, err := r.download(ctx, a, tmp)
 		if err != nil {
-			return true, true, fmt.Errorf("%s: %w", a.Name, err)
+			err = fmt.Errorf("%s: %w", a.Name, err)
+			if !permanent(err) {
+				return true, true, err
+			}
+			// Retrying cannot help, and would hold up every newer
+			// release of the repository.
+			errs = append(errs, err)
+			r.conflict("download", repo, rel, a.Name, err.Error())
+			continue
 		}
 		if want, ok := expected(a, sums); ok {
 			if want != da.sha256 {
@@ -578,6 +593,16 @@ func (r *run) isCandidate(name string) bool {
 	return false
 }
 
+// errTooLarge is an asset over server.max_upload_size.
+var errTooLarge = errors.New("larger than server.max_upload_size")
+
+// permanent reports whether a download failure recurs on every retry: the
+// asset is too large, or the server says it is gone.
+func permanent(err error) bool {
+	var se *forge.StatusError
+	return errors.Is(err, errTooLarge) || errors.As(err, &se) && se.Permanent()
+}
+
 type downloaded struct {
 	*asset
 	sha256 string
@@ -602,7 +627,7 @@ func (r *run) download(ctx context.Context, a forge.Asset, dir string) (*downloa
 		return nil, err
 	}
 	if n > limit {
-		return nil, fmt.Errorf("larger than server.max_upload_size (%d bytes)", limit)
+		return nil, fmt.Errorf("%w (%d bytes)", errTooLarge, limit)
 	}
 	return &downloaded{asset: &asset{Asset: a, path: p}, sha256: hex.EncodeToString(h.Sum(nil))}, nil
 }
@@ -696,7 +721,7 @@ func (r *run) checksums(ctx context.Context, rel forge.Release, dir string) (map
 		}
 		body, err := r.client.Download(ctx, a)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", a.Name, err)
+			return nil, &checksumError{name: a.Name, err: err}
 		}
 		data, err := io.ReadAll(io.LimitReader(body, 4<<20))
 		body.Close()
@@ -707,6 +732,15 @@ func (r *run) checksums(ctx context.Context, rel forge.Release, dir string) (map
 	}
 	return sums, nil
 }
+
+// checksumError is a checksum file that could not be downloaded.
+type checksumError struct {
+	name string
+	err  error
+}
+
+func (e *checksumError) Error() string { return e.name + ": " + e.err.Error() }
+func (e *checksumError) Unwrap() error { return e.err }
 
 // isChecksumFile matches the source's checksums: globs, or without them
 // the common names: checksums.txt, *_checksums.txt (GoReleaser),

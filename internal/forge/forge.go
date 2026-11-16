@@ -337,13 +337,30 @@ func (h *httpClient) download(ctx context.Context, u string, header http.Header)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		msg := fmt.Sprintf("download %s: HTTP %d", redact(u), resp.StatusCode)
-		if !sameOrigin(resp.Request.URL, h.origin) {
-			msg += " (fetched without credentials: the link points outside the forge)"
-		}
-		return nil, errors.New(msg)
+		return nil, &StatusError{URL: redact(u), Code: resp.StatusCode,
+			External: !sameOrigin(resp.Request.URL, h.origin)}
 	}
 	return resp.Body, nil
+}
+
+// StatusError is a download answered with an HTTP status other than 200.
+type StatusError struct {
+	URL      string // without its query
+	Code     int
+	External bool // fetched without credentials from outside the forge
+}
+
+func (e *StatusError) Error() string {
+	msg := fmt.Sprintf("download %s: HTTP %d", e.URL, e.Code)
+	if e.External {
+		msg += " (fetched without credentials: the link points outside the forge)"
+	}
+	return msg
+}
+
+// Permanent reports whether the asset is gone, so a retry cannot succeed.
+func (e *StatusError) Permanent() bool {
+	return e.Code == http.StatusNotFound || e.Code == http.StatusGone
 }
 
 // api builds an API URL; path must already be escaped.

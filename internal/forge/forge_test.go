@@ -236,3 +236,25 @@ func TestUntrustedCertificateFails(t *testing.T) {
 		t.Errorf("err = %v, want a certificate error", err)
 	}
 }
+
+func TestDownloadStatusError(t *testing.T) {
+	codes := map[string]int{"/gone": 404, "/removed": 410, "/busy": 503, "/denied": 403}
+	f, srv := tlsForge(t, "forgejo", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(codes[r.URL.Path])
+	}))
+	c, err := New(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, code := range codes {
+		_, err := c.Download(context.Background(), Asset{Name: p, URL: srv.URL + p})
+		var se *StatusError
+		if !errors.As(err, &se) || se.Code != code {
+			t.Errorf("%s: err = %v, want a StatusError with %d", p, err, code)
+			continue
+		}
+		if want := code == 404 || code == 410; se.Permanent() != want {
+			t.Errorf("%s: Permanent() = %v, want %v", p, se.Permanent(), want)
+		}
+	}
+}

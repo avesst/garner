@@ -370,7 +370,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
 | `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `created_at` | Where a package is published. |
 | `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`, the only one in the MVP (section 17). |
-| `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content and asset-mapping conflicts. |
+| `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. |
 | `source_state` | `source` PK, `last_run`, `last_success`, `last_error`, `etags` (TEXT/JSON) | |
 | `source_repos` | `source`, `repo`, `etag`, `last_seen` | Cached org/group listing. |
 | `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
@@ -473,6 +473,11 @@ not trusted.
   `2024-05-release`). `seen_releases` keeps a release from being processed
   twice, also when its timestamp is edited.
 - If upstream deletes a release, the packages stay; retention handles them.
+- A failed download leaves the release for the next run, except one that
+  cannot succeed: HTTP 404 or 410, or an asset larger than
+  `server.max_upload_size`. That asset is skipped and a `download` conflict
+  is recorded; for a checksum file, the whole release is skipped, since its
+  assets cannot be verified.
 
 **Asset selection.**
 
