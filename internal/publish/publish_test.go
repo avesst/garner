@@ -275,6 +275,23 @@ func TestRetentionAndRollback(t *testing.T) {
 	}
 }
 
+// Packages of a format that is not enabled, for example rpm while its
+// tools are missing, are neither published nor dropped.
+func TestRetainLeavesDisabledFormatAlone(t *testing.T) {
+	f := newFixture(t)
+	pkgs := []*format.Package{
+		{Format: "deb", Name: "app", Version: "1.0", Distribution: "stable", Arch: "amd64"},
+		{Format: "rpm", Name: "app", Version: "1.0", Release: "1", Distribution: "stable", Arch: "x86_64"},
+	}
+	keep, drop := f.pub.retain(f.cfg, pkgs)
+	if len(keep) != 1 || keep[0].Format != "deb" {
+		t.Errorf("keep = %v, want only the deb", keep)
+	}
+	if len(drop) != 0 {
+		t.Errorf("drop = %v, want none", drop)
+	}
+}
+
 func TestStaleComparesInputs(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

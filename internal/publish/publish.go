@@ -215,7 +215,8 @@ func (p *Publisher) retain(cfg *config.Config, pkgs []*format.Package) (keep, dr
 		g := groups[k]
 		fm, ok := p.Formats.Get(k.format)
 		if !ok {
-			drop = append(drop, g...) // a format no longer enabled
+			// A disabled format, perhaps only until its tools are back:
+			// not published, and not removed either.
 			continue
 		}
 		slices.SortStableFunc(g, func(a, b *format.Package) int { return fm.Compare(b, a) })

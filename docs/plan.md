@@ -56,7 +56,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 |---|---|---|
 | CLI library: standard `flag` or a framework | Slice 1 | Implemented with `flag` plus a helper that accepts flags after positional arguments |
 | Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
-| rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools |
+| rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools; rpm packages stay stored and come back when the tools do |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | `.deb` built with `dpkg-deb` (`just deb`), tested in a Debian 13 systemd container; `.rpm` open |
 | Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
