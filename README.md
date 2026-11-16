@@ -23,6 +23,11 @@ It checks them and serves them signed with one key, so clients trust the
 repository and nothing else. It does not mirror distributions or build
 packages from source.
 
+> [!WARNING]
+> garner is under active development and is not ready for internet-facing
+> use. Run it on an internal network, with access limited to the hosts and
+> networks that need it.
+
 ## How it works
 
 garner verifies upstream checksums, then signs the metadata of both formats
