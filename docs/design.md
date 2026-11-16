@@ -482,6 +482,9 @@ not trusted.
   `server.max_upload_size`. That asset is skipped and a `download` conflict
   is recorded; for a checksum file, the whole release is skipped, since its
   assets cannot be verified.
+- An asset rejected for its content (invalid package, content or ownership
+  conflict) does not hold the release back. Any other ingest failure (disk,
+  database, signing) leaves the release for the next run.
 
 **Asset selection.**
 

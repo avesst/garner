@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	gosync "sync"
@@ -335,6 +336,33 @@ func TestTransientFailureRetries(t *testing.T) {
 		t.Fatalf("LastError = %q", st.LastError)
 	}
 	delete(f.forge.fail, a.URL)
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("retry failed: %q", st.LastError)
+	}
+	if len(f.placed()) != 1 {
+		t.Errorf("release not processed on retry: %v", f.placed())
+	}
+}
+
+// An ingest failure that is not the package's fault, here an unwritable
+// blob store as with a full disk, leaves the release for the next poll.
+func TestIngestFailureRetries(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory mode this test relies on")
+	}
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "x"))
+	blobTmp := filepath.Join(f.m.TmpDir, "blobs", "tmp")
+	if err := os.Chmod(blobTmp, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if st := f.sync(); !strings.Contains(st.LastError, "permission denied") {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	if err := os.Chmod(blobTmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if st := f.sync(); st.LastError != "" {
 		t.Fatalf("retry failed: %q", st.LastError)
 	}

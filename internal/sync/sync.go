@@ -572,7 +572,14 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 			continue
 		}
 		if err := r.ingest(ctx, repo, rel, a, settings); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", a.Name, err))
+			err = fmt.Errorf("%s: %w", a.Name, err)
+			var ie *ingest.Error
+			if !errors.As(err, &ie) {
+				// Not the package's fault (disk, database, signing):
+				// leave the release unseen so the next poll retries it.
+				return true, true, errors.Join(append(errs, err)...)
+			}
+			errs = append(errs, err)
 		}
 	}
 	return true, false, errors.Join(errs...)
