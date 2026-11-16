@@ -115,6 +115,16 @@ func ClientOrder(ds []string) []string {
 	return out
 }
 
+// DefaultDistribution is where a package goes when no distribution is
+// named: the first of ClientOrder, so the same one whose client file is
+// served at the root. It is "" when ds is empty.
+func DefaultDistribution(ds []string) string {
+	if o := ClientOrder(ds); len(o) > 0 {
+		return o[0]
+	}
+	return ""
+}
+
 // ClientPath is where the client file name for the i-th distribution in
 // ClientOrder is served: the default's at the root, so its URL does not
 // change when distributions are added, the others in ClientsDir.

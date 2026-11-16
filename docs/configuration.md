@@ -94,7 +94,7 @@ Promoting a new key re-signs every rpm package from its original.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `architectures` | list | `[amd64]` | Debian architectures to publish. Lowercase letters, digits and `-`. Don't list `all`: architecture-independent packages are published under every listed architecture automatically. |
-| `suites` | list | `[stable]` | Suites to publish. Letters, digits, `.`, `_` and `-`. The first suite, or `stable` if listed, is the default: its client file is served at the root and the others below `clients/<suite>/`. |
+| `suites` | list | `[stable]` | Suites to publish. Letters, digits, `.`, `_` and `-`. The first suite, or `stable` if listed, is the default: uploads without `--suite` and sources without asset rules use it, and its client file is served at the root, the others below `clients/<suite>/`. |
 
 ## `rpm`
 
@@ -187,7 +187,8 @@ Set `suite`, `release` or both. Rules are evaluated in order. The first rule
 whose `match` fits the asset name and that sets a target for the asset's
 format wins, so a `*` rule with only `suite` does not catch rpm assets.
 
-- With no rules at all, every asset goes to `stable`.
+- With no rules at all, every asset goes to the default suite or release:
+  `stable` if listed, else the first one.
 - With rules, an asset that no rule places is skipped and not downloaded.
 - If two assets of one release end up as the same package, version,
   architecture and distribution, both are skipped and a conflict is

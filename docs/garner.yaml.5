@@ -242,8 +242,10 @@ and
 .BR \- .
 The first suite, or
 .B stable
-if listed, is the default: its client file is served at the root and the
-others below
+if listed, is the default: uploads without
+.B \-\-suite
+and sources without asset rules use it, and its client file is served at
+the root, the others below
 .IR clients/<suite>/ .
 .SH RPM
 rpm support also needs
@@ -522,8 +524,9 @@ rule with only
 .B suite
 does not catch rpm assets.
 .IP \(bu 2
-With no rules at all, every asset goes to
-.BR stable .
+With no rules at all, every asset goes to the default suite or release:
+.B stable
+if listed, else the first one.
 .IP \(bu 2
 With rules, an asset that no rule places is skipped and not downloaded.
 .IP \(bu 2

@@ -71,7 +71,7 @@ type Ingester struct {
 type Request struct {
 	// Targets maps a format's DistributionKey to the distribution to
 	// place the package in ("suite": "noble"). A missing or empty entry
-	// means "stable".
+	// means the default distribution (format.DefaultDistribution).
 	Targets map[string]string
 	// Owner is the delivering identity: a token's owner label or
 	// "source:<name>".
@@ -122,7 +122,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 
 	dist := req.Targets[fm.DistributionKey()]
 	if dist == "" {
-		dist = "stable"
+		dist = format.DefaultDistribution(fm.Distributions(cfg))
 	}
 	if dists := fm.Distributions(cfg); !slices.Contains(dists, dist) {
 		return nil, notConfigured("%s distribution %q is not configured; configured: %s",

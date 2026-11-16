@@ -174,3 +174,25 @@ func TestRejectsUnconfigured(t *testing.T) {
 		t.Errorf("Architecture: all rejected: %v", err)
 	}
 }
+
+// Without a target, a package goes to the default distribution: stable
+// if configured, else the first one listed, as for the client files.
+func TestDefaultDistribution(t *testing.T) {
+	for _, tc := range []struct {
+		suites []string
+		want   string
+	}{
+		{[]string{"noble", "stable"}, "stable"},
+		{[]string{"noble", "jammy"}, "noble"},
+	} {
+		f := newFixture(t)
+		f.cfg.Deb.Suites = tc.suites
+		res, err := f.upload(t, debtest.Build("app", "1.0", "amd64", "a"), "", "team")
+		if err != nil {
+			t.Fatalf("suites %v: %v", tc.suites, err)
+		}
+		if res.Distribution != tc.want {
+			t.Errorf("suites %v: distribution %q, want %q", tc.suites, res.Distribution, tc.want)
+		}
+	}
+}

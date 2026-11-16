@@ -663,3 +663,18 @@ func TestNewerReleaseEndsWaitForAssets(t *testing.T) {
 		t.Errorf("placed %q, want release 2", got)
 	}
 }
+
+// Without asset rules, assets go to the default distribution: stable if
+// configured, else the first one listed.
+func TestNoRulesUsesDefaultDistribution(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	f.cfg.Deb.Suites = []string{"noble", "jammy"}
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "x"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 1.0 noble") {
+		t.Errorf("placed = %s, want tool 1.0 in noble", got)
+	}
+}

@@ -79,6 +79,9 @@ to print the raw response.
 .TP
 .B upload \fR[\fB\-\-suite \fIS\fR] [\fB\-\-release \fIR\fR] \fIFILES\fR...
 Upload .deb or .rpm files into a deb suite or rpm release.
+Without them, packages go to the default one:
+.B stable
+if configured, else the first listed.
 Scope:
 .BR upload .
 .TP

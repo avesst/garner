@@ -648,7 +648,8 @@ func (r *run) download(ctx context.Context, a forge.Asset, dir string) (*downloa
 
 // identify parses the file and picks its distribution from the asset
 // rules: the first rule matching the name that sets a target for the
-// file's format. With no rules, the target is "stable".
+// file's format. With no rules, the target is the format's default
+// distribution.
 func (r *run) identify(a *asset) error {
 	f, err := os.Open(a.path)
 	if err != nil {
@@ -665,7 +666,7 @@ func (r *run) identify(a *asset) error {
 	}
 	a.format, a.parsed = fm, parsed
 	if len(r.src.Assets) == 0 {
-		a.target = "stable"
+		a.target = format.DefaultDistribution(fm.Distributions(r.cfg))
 		return nil
 	}
 	for _, rule := range r.src.Assets {
