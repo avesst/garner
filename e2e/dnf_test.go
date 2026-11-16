@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
 )
 
 // imageTag is the garner image built from the repository's Dockerfile.
@@ -152,7 +154,7 @@ rpm -q --qf '%%{SIGPGP:pgpsig}%%{RSAHEADER:pgpsig}\n' garner-hello
 			if err != nil {
 				t.Fatalf("dnf failed: %v\n%s", err, out)
 			}
-			keyID := strings.ToLower(e.fingerprint()[24:])
+			keyID := e.keyID(t)
 			for _, want := range []string{"hello 2.0", "3:2.0-1.x86_64", "RSA/SHA256", "Key ID " + keyID} {
 				if !strings.Contains(string(out), want) {
 					t.Errorf("output lacks %q:\n%s", want, out)
@@ -192,18 +194,24 @@ dnf -y -q install garner-hello`, e.url)).CombinedOutput()
 	})
 }
 
-// fingerprint reads the signing key fingerprint from the landing page.
-func (e *containerEnv) fingerprint() string {
-	e.t.Helper()
-	resp, err := http.Get(e.url + "/")
+// keyID returns the long key ID of the signing key garner publishes as
+// key.gpg, lowercase as rpm prints it.
+func (e *containerEnv) keyID(t *testing.T) string {
+	t.Helper()
+	resp, err := http.Get(e.url + "/key.gpg")
 	if err != nil {
-		e.t.Fatal(err)
+		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	page, _ := io.ReadAll(resp.Body)
-	m := regexp.MustCompile(`[0-9A-F]{40}`).Find(page)
-	if m == nil {
-		e.t.Fatal("no fingerprint on the landing page")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /key.gpg: HTTP %d", resp.StatusCode)
 	}
-	return string(m)
+	keys, err := openpgp.ReadKeyRing(resp.Body)
+	if err != nil {
+		t.Fatalf("key.gpg: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("key.gpg holds %d keys, want 1", len(keys))
+	}
+	return fmt.Sprintf("%016x", keys[0].PrimaryKey.KeyId)
 }
