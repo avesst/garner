@@ -76,13 +76,14 @@ func (Format) Parse(f *os.File) (*format.Parsed, error) {
 }
 
 // version rebuilds a package's dpkg version from its stored columns.
+// The epoch goes back in front before parsing: without it, a colon in the
+// upstream part would be read as the epoch separator.
 func version(p *format.Package) Version {
-	v, err := ParseVersion(p.Version)
+	v, err := ParseVersion(fmt.Sprintf("%d:%s", p.Epoch, p.Version))
 	if err != nil {
 		// Stored versions were parsed at ingest; fall back to raw order.
 		return Version{Upstream: p.Version}
 	}
-	v.Epoch = uint32(p.Epoch)
 	return v
 }
 
