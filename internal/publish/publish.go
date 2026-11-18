@@ -311,7 +311,7 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 
 	entries := make([]store.SnapshotEntry, len(pkgs))
 	for i, pk := range pkgs {
-		entries[i] = store.SnapshotEntry{PackageID: pk.ID, Distribution: pk.Distribution}
+		entries[i] = store.SnapshotEntry{PackageID: pk.ID, Distribution: pk.Distribution, ServedSHA256: pk.ServedSHA256()}
 	}
 	if err := p.Store.Tx(ctx, func(q *store.Queries) error {
 		return q.InsertSnapshot(ctx, snap, entries)

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -113,6 +114,10 @@ func TestRpmResignedAfterKeyPromotionAndRestart(t *testing.T) {
 	e.uploadRPM()
 	e.api(http.MethodPost, "/api/v1/publish", nil)
 	oldID := e.keyID(t)
+	oldFiles := e.rpmPoolFiles()
+	if len(oldFiles) == 0 {
+		t.Fatal("no rpm in the pool after the first publish")
+	}
 
 	fp, err := signing.Generate(filepath.Join(e.dir, "signing", "new.asc"), "e2e repository new", "")
 	if err != nil {
@@ -142,4 +147,34 @@ func TestRpmResignedAfterKeyPromotionAndRestart(t *testing.T) {
 	if !strings.Contains(out, "Key ID "+newID) {
 		t.Fatalf("rpm still signed by the old key %s, want the new key %s:\n%s", oldID, newID, out)
 	}
+
+	// Snapshots from before the promotion are retained and still serve
+	// the rpm signed with the old key.
+	e.api(http.MethodPost, "/api/v1/gc", nil)
+	for _, f := range oldFiles {
+		if _, err := os.Stat(filepath.Join(e.dir, "pool", "rpm", f)); err != nil {
+			t.Errorf("GC removed %s, which retained snapshots still serve: %v", f, err)
+		}
+	}
+}
+
+// rpmPoolFiles returns the rpm files in the pool, relative to it.
+func (e *containerEnv) rpmPoolFiles() []string {
+	e.t.Helper()
+	root := filepath.Join(e.dir, "pool", "rpm")
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasSuffix(path, ".rpm") {
+			rel, _ := filepath.Rel(root, path)
+			out = append(out, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return out
 }

@@ -19,6 +19,9 @@ type Snapshot struct {
 type SnapshotEntry struct {
 	PackageID    string
 	Distribution string
+	// ServedSHA256 is the blob the snapshot serves the package from. A
+	// re-sign can change the package's blob later; GC keeps this one.
+	ServedSHA256 string
 }
 
 // InsertSnapshot records a snapshot and its package set.
@@ -28,8 +31,8 @@ func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []Sna
 		return err
 	}
 	for _, e := range entries {
-		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_packages (snapshot_id, package_id, distribution)
-			VALUES (?, ?, ?)`, s.ID, e.PackageID, e.Distribution); err != nil {
+		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_packages (snapshot_id, package_id, distribution, served_sha256)
+			VALUES (?, ?, ?, ?)`, s.ID, e.PackageID, e.Distribution, e.ServedSHA256); err != nil {
 			return err
 		}
 	}
@@ -107,12 +110,14 @@ func (q *Queries) DeleteSnapshot(ctx context.Context, id string) error {
 	return err
 }
 
-// ReferencedBlobs returns every blob referenced by a package that is in a
-// snapshot or not removed everywhere. GC keeps these (section 9).
+// ReferencedBlobs returns every blob a snapshot serves, and every blob
+// referenced by a package that is in a snapshot or not removed everywhere.
+// GC keeps these (section 9).
 func (q *Queries) ReferencedBlobs(ctx context.Context) (map[string]bool, error) {
 	rows, err := q.q.QueryContext(ctx, `SELECT p.blob_sha256, p.signed_blob_sha256 FROM packages p
 		WHERE p.id IN (SELECT package_id FROM snapshot_packages)
-		   OR p.id IN (SELECT package_id FROM placements WHERE state <> ?)`, Removed)
+		   OR p.id IN (SELECT package_id FROM placements WHERE state <> ?)
+		UNION SELECT served_sha256, NULL FROM snapshot_packages WHERE served_sha256 <> ''`, Removed)
 	if err != nil {
 		return nil, err
 	}
@@ -152,9 +157,9 @@ func (q *Queries) Blobs(ctx context.Context) (map[string]string, error) {
 
 // DeleteUnreferencedPackages removes packages that are in no snapshot and
 // whose placements are all removed. It returns the sha256s of the blobs no
-// package references any more. Their rows stay: a blob's row and file go
-// together in RemoveBlob's transaction, so an upload of the same content
-// in the meantime keeps them.
+// package or snapshot references any more. Their rows stay: a blob's row
+// and file go together in RemoveBlob's transaction, so an upload of the
+// same content in the meantime keeps them.
 func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, error) {
 	if _, err := q.q.ExecContext(ctx, `DELETE FROM placements WHERE package_id IN (
 		SELECT p.id FROM packages p
@@ -169,7 +174,8 @@ func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, err
 	}
 	rows, err := q.q.QueryContext(ctx, `SELECT sha256 FROM blobs
 		WHERE sha256 NOT IN (SELECT blob_sha256 FROM packages)
-		  AND sha256 NOT IN (SELECT signed_blob_sha256 FROM packages WHERE signed_blob_sha256 IS NOT NULL)`)
+		  AND sha256 NOT IN (SELECT signed_blob_sha256 FROM packages WHERE signed_blob_sha256 IS NOT NULL)
+		  AND sha256 NOT IN (SELECT served_sha256 FROM snapshot_packages)`)
 	if err != nil {
 		return nil, err
 	}
@@ -185,19 +191,20 @@ func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, err
 	return gone, rows.Err()
 }
 
-// RemoveBlob deletes the row of a blob no package references, and calls
-// remove, which deletes its file, before the transaction commits. It
-// reports false, and leaves row and file alone, when a package references
-// the blob. It first takes the blob's row lock, which AddBlob also takes,
-// so it waits for an upload that is adding a package with this content.
-// Call it inside a transaction.
+// RemoveBlob deletes the row of a blob no package or snapshot references,
+// and calls remove, which deletes its file, before the transaction
+// commits. It reports false, and leaves row and file alone, when one
+// references the blob. It first takes the blob's row lock, which AddBlob
+// also takes, so it waits for an upload that is adding a package with this
+// content. Call it inside a transaction.
 func (q *Queries) RemoveBlob(ctx context.Context, sha string, remove func() error) (bool, error) {
 	if err := q.lockBlob(ctx, sha, 0); err != nil {
 		return false, err
 	}
 	var referenced bool
 	err := q.q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM packages
-		WHERE blob_sha256 = ? OR signed_blob_sha256 = ?)`, sha, sha).Scan(&referenced)
+		WHERE blob_sha256 = ? OR signed_blob_sha256 = ?)
+		OR EXISTS (SELECT 1 FROM snapshot_packages WHERE served_sha256 = ?)`, sha, sha, sha).Scan(&referenced)
 	if err != nil || referenced {
 		return false, err
 	}

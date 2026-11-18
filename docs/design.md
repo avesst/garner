@@ -376,7 +376,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `source_repos` | `source`, `repo`, `etag`, `last_seen` | Cached org/group listing. |
 | `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
 | `snapshots` | `id`, `created_at`, `config_hash`, `is_current` | |
-| `snapshot_packages` | `snapshot_id`, `package_id`, `distribution` | Drives GC reachability. |
+| `snapshot_packages` | `snapshot_id`, `package_id`, `distribution`, `served_sha256` | Drives GC reachability. `served_sha256` is the blob the snapshot serves the package from, kept after a re-sign replaces it. |
 | `tokens` | `id`, `name`, `owner`, `scopes`, `hash`, `created_at`, `last_used_at`, `revoked_at` | sha256 of a 256-bit random secret. |
 | `events` | `id`, `at`, `actor`, `action`, `detail` | Audit log. Later, not in the MVP (section 15). |
 

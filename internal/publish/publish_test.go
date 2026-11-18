@@ -387,6 +387,116 @@ func TestGC(t *testing.T) {
 	}
 }
 
+// resign gives the package name a new signed variant with the given
+// content, as Ingester.Resign does after a key change, and returns its
+// sha256.
+func (f *fixture) resign(t *testing.T, name, content string) string {
+	t.Helper()
+	ctx := context.Background()
+	b, err := f.pub.Blobs.Put(strings.NewReader(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.pub.Store.Tx(ctx, func(q *store.Queries) error {
+		pkgs, err := q.Placed(ctx, store.PackageFilter{Name: name})
+		if err != nil {
+			return err
+		}
+		if err := q.AddBlob(ctx, b.SHA256, b.Size); err != nil {
+			return err
+		}
+		return q.SetSignedBlob(ctx, pkgs[0].ID, b.SHA256)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b.SHA256
+}
+
+// servedFiles returns the pool files a snapshot's amd64 Packages index
+// lists, as paths below public/.
+func (f *fixture) servedFiles(t *testing.T, snapshotDir string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(f.read(t, filepath.Join(snapshotDir, "deb/dists/stable/main/binary-amd64/Packages")), "\n") {
+		if name, ok := strings.CutPrefix(line, "Filename: "); ok {
+			out = append(out, filepath.Join("deb", name))
+		}
+	}
+	return out
+}
+
+// A re-sign replaces the blob a package is served from. Until a snapshot
+// that lists the new blob replaces the current one, GC must keep the old.
+func TestGCKeepsFilesOfCurrentSnapshotAfterResign(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Storage.GCGrace = 0
+	f.add(t, "app", "1.0", "amd64")
+	f.resign(t, "app", "signed with the old key")
+	f.publish(t)
+	served := f.servedFiles(t, "current")
+	if len(served) != 1 {
+		t.Fatalf("current snapshot lists %v, want one file", served)
+	}
+
+	f.resign(t, "app", "signed with the new key")
+	if _, err := f.pub.GC(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range served {
+		if _, err := os.Stat(filepath.Join(f.root, "public", rel)); err != nil {
+			t.Errorf("current snapshot serves %s, which GC removed: %v", rel, err)
+		}
+	}
+}
+
+// After a re-sign and a publish, the previous snapshot is retained and
+// keeps serving the old signed blob; once GC collects that snapshot, the
+// blob goes too.
+func TestGCKeepsResignedBlobWhileSnapshotRetained(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.cfg.Storage.SnapshotRetention = 2
+	f.cfg.Storage.GCGrace = 0
+	f.add(t, "app", "1.0", "amd64")
+	old := f.resign(t, "app", "signed with the old key")
+	f.publish(t)
+	served := f.servedFiles(t, "current")
+
+	f.resign(t, "app", "signed with the new key")
+	f.publish(t)
+	if _, err := f.pub.GC(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range served {
+		if _, err := os.Stat(filepath.Join(f.root, "public", rel)); err != nil {
+			t.Errorf("retained snapshot serves %s, which GC removed: %v", rel, err)
+		}
+	}
+
+	f.add(t, "other", "1.0", "amd64")
+	f.publish(t)
+	res, err := f.pub.GC(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Snapshots) != 1 {
+		t.Fatalf("collected snapshots %v, want the first", res.Snapshots)
+	}
+	path, err := f.pub.Blobs.Path(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("old signed blob kept after its last snapshot was collected: %v", err)
+	}
+	for _, rel := range served {
+		if _, err := os.Stat(filepath.Join(f.root, "public", rel)); !os.IsNotExist(err) {
+			t.Errorf("pool file %s kept after its last snapshot was collected: %v", rel, err)
+		}
+	}
+}
+
 func TestLinksAreReconciled(t *testing.T) {
 	f := newFixture(t)
 	f.publish(t)
