@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"io"
 	"log/slog"
@@ -21,12 +22,14 @@ import (
 	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/deb/debtest"
 	"github.com/avesst/garner/internal/format"
+	"github.com/avesst/garner/internal/id"
 	"github.com/avesst/garner/internal/ingest"
 	"github.com/avesst/garner/internal/signing"
 	"github.com/avesst/garner/internal/store"
 )
 
 type fixture struct {
+	db   *sql.DB
 	root string
 	cfg  *config.Config
 	in   *ingest.Ingester
@@ -60,7 +63,7 @@ func newFixture(t *testing.T) *fixture {
 	cfg.Deb.Architectures = []string{"amd64", "arm64"}
 	cfg.Defaults.Retention = 2
 	cfg.Hash = "cafe"
-	f := &fixture{root: root, cfg: cfg, keys: keys}
+	f := &fixture{db: d.DB, root: root, cfg: cfg, keys: keys}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := store.New(d.DB)
 	f.in = &ingest.Ingester{Store: st, Blobs: blobs, Formats: reg, Config: func() *config.Config { return f.cfg },
@@ -586,6 +589,74 @@ func TestDiscardKeepsLinkedSnapshot(t *testing.T) {
 	rows, dirs := f.snapshotIDs(t)
 	if !slices.Equal(rows, []string{s.ID}) || !slices.Equal(dirs, []string{s.ID}) {
 		t.Errorf("rows %v, directories %v; want the linked snapshot %s kept", rows, dirs, s.ID)
+	}
+}
+
+// gc_grace counts from when a snapshot stopped being current. A newer
+// snapshot's created_at is set before it renders, so a render longer than
+// gc_grace must not cut short the grace of the snapshot it replaces.
+func TestGCGraceCountsFromReplacement(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.cfg.Storage.SnapshotRetention = 2
+	f.cfg.Storage.GCGrace = time.Hour
+	f.add(t, "app", "1.0", "amd64")
+	s1 := f.publish(t)
+	f.add(t, "app", "2.0", "amd64")
+	s2 := f.publish(t)
+	f.add(t, "app", "3.0", "amd64")
+	f.publish(t)
+	// s2 took two hours to render; s1 was current until it finished.
+	for id, age := range map[string]time.Duration{s1.ID: 3 * time.Hour, s2.ID: 2 * time.Hour} {
+		if _, err := f.db.Exec(`UPDATE snapshots SET created_at = ? WHERE id = ?`,
+			store.FormatTime(time.Now().Add(-age)), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := f.pub.GC(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Snapshots) != 0 {
+		t.Errorf("collected %v; s1 %s was replaced moments ago, within gc_grace", res.Snapshots, s1.ID)
+	}
+
+	f.cfg.Storage.GCGrace = 0
+	res, err = f.pub.GC(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Snapshots, []string{s1.ID}) {
+		t.Errorf("collected %v after gc_grace, want [%s]", res.Snapshots, s1.ID)
+	}
+}
+
+// A snapshot that never became current, left by a publish that crashed
+// before the swap, gets gc_grace from its creation.
+func TestGCGraceOfSnapshotNeverCurrent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.cfg.Storage.SnapshotRetention = 2
+	f.cfg.Storage.GCGrace = time.Hour
+	f.publish(t)
+	f.publish(t)
+	leftover := func(age time.Duration) string {
+		s := &store.Snapshot{ID: id.New(), CreatedAt: store.FormatTime(time.Now().Add(-age))}
+		if err := f.pub.Store.Tx(ctx, func(q *store.Queries) error { return q.InsertSnapshot(ctx, s, nil) }); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(f.root, "snapshots", s.ID), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return s.ID
+	}
+	fresh, stale := leftover(10*time.Minute), leftover(2*time.Hour)
+	res, err := f.pub.GC(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(res.Snapshots, []string{stale}) {
+		t.Errorf("collected %v, want only the leftover past gc_grace %s (not %s)", res.Snapshots, stale, fresh)
 	}
 }
 

@@ -40,9 +40,14 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		if i < cfg.Storage.SnapshotRetention || s.IsCurrent {
 			continue
 		}
-		// A snapshot is replaced when the next newer one is created;
-		// requests resolved through it get gc_grace to finish.
-		replaced, err := store.ParseTime(snaps[i-1].CreatedAt)
+		// Requests resolved through a snapshot get gc_grace to finish
+		// after it stopped being current. One that never was current is
+		// left over from a crashed publish.
+		since := s.ReplacedAt
+		if since == "" {
+			since = s.CreatedAt
+		}
+		replaced, err := store.ParseTime(since)
 		if err != nil {
 			return nil, err
 		}

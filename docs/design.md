@@ -375,7 +375,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `source_state` | `source` PK, `last_run`, `last_success`, `last_error`, `etags` (TEXT/JSON) | |
 | `source_repos` | `source`, `repo`, `etag`, `last_seen` | Cached org/group listing. |
 | `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
-| `snapshots` | `id`, `created_at`, `config_hash`, `is_current` | |
+| `snapshots` | `id`, `created_at`, `config_hash`, `is_current`, `replaced_at` | `replaced_at`: when the snapshot stopped being current, for `gc_grace`. |
 | `snapshot_packages` | `snapshot_id`, `package_id`, `distribution`, `served_sha256` | Drives GC reachability. `served_sha256` is the blob the snapshot serves the package from, kept after a re-sign replaces it. |
 | `tokens` | `id`, `name`, `owner`, `scopes`, `hash`, `created_at`, `last_used_at`, `revoked_at` | sha256 of a 256-bit random secret. |
 | `events` | `id`, `at`, `actor`, `action`, `detail` | Audit log. Later, not in the MVP (section 15). |
@@ -621,7 +621,10 @@ says which tools are missing.
    are marked `removed`.
 2. A blob is deleted only when no retained snapshot references it.
 3. A replaced snapshot is not deleted until `storage.gc_grace` has passed
-   (default 10 min), so requests already resolved through it can finish.
+   (default 10 min) since it stopped being current, so requests already
+   resolved through it can finish. A snapshot that never became current,
+   left by a publish that crashed before the swap, gets the grace from its
+   creation. A publish that fails without crashing removes its snapshot.
 
 ## 10. Signing
 

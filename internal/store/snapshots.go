@@ -13,6 +13,9 @@ type Snapshot struct {
 	IsCurrent  bool   `json:"current"`
 	// Inputs is a digest of what the snapshot was rendered from.
 	Inputs string `json:"-"`
+	// ReplacedAt is when the snapshot stopped being current; "" if it is
+	// current or never was.
+	ReplacedAt string `json:"-"`
 }
 
 // SnapshotEntry places a package in a distribution of a snapshot.
@@ -39,18 +42,20 @@ func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []Sna
 	return nil
 }
 
-// SetCurrent marks one snapshot current.
+// SetCurrent marks one snapshot current, and the one it replaces as
+// replaced now.
 func (q *Queries) SetCurrent(ctx context.Context, id string) error {
-	if _, err := q.q.ExecContext(ctx, `UPDATE snapshots SET is_current = FALSE WHERE is_current`); err != nil {
+	if _, err := q.q.ExecContext(ctx, `UPDATE snapshots SET is_current = FALSE, replaced_at = ?
+		WHERE is_current`, Now()); err != nil {
 		return err
 	}
-	_, err := q.q.ExecContext(ctx, `UPDATE snapshots SET is_current = TRUE WHERE id = ?`, id)
+	_, err := q.q.ExecContext(ctx, `UPDATE snapshots SET is_current = TRUE, replaced_at = '' WHERE id = ?`, id)
 	return err
 }
 
 // Snapshots lists snapshots, newest first.
 func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
-	rows, err := q.q.QueryContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs FROM snapshots
+	rows, err := q.q.QueryContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs, replaced_at FROM snapshots
 		ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, err
@@ -59,7 +64,7 @@ func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
 	var out []Snapshot
 	for rows.Next() {
 		var s Snapshot
-		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs); err != nil {
+		if err := rows.Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs, &s.ReplacedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
@@ -70,8 +75,8 @@ func (q *Queries) Snapshots(ctx context.Context) ([]Snapshot, error) {
 // CurrentSnapshot returns the current snapshot, or ErrNotFound.
 func (q *Queries) CurrentSnapshot(ctx context.Context) (*Snapshot, error) {
 	var s Snapshot
-	err := q.q.QueryRowContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs FROM snapshots
-		WHERE is_current`).Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs)
+	err := q.q.QueryRowContext(ctx, `SELECT id, created_at, config_hash, is_current, inputs, replaced_at FROM snapshots
+		WHERE is_current`).Scan(&s.ID, &s.CreatedAt, &s.ConfigHash, &s.IsCurrent, &s.Inputs, &s.ReplacedAt)
 	if err != nil {
 		return nil, wrapNotFound(err, "current snapshot")
 	}
