@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -494,6 +495,97 @@ func TestGCKeepsResignedBlobWhileSnapshotRetained(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(f.root, "public", rel)); !os.IsNotExist(err) {
 			t.Errorf("pool file %s kept after its last snapshot was collected: %v", rel, err)
 		}
+	}
+}
+
+// failPublish runs a publish that fails at the swap of public/current,
+// after its snapshot was rendered and recorded.
+func (f *fixture) failPublish(t *testing.T) {
+	t.Helper()
+	pub := filepath.Join(f.root, "public")
+	if err := os.Chmod(pub, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(pub, 0o755)
+	if _, err := f.pub.Publish(context.Background()); err == nil {
+		t.Fatal("publish succeeded, want it to fail at the swap")
+	}
+}
+
+// snapshotIDs returns the recorded snapshots, newest first, and the
+// snapshot directories on disk.
+func (f *fixture) snapshotIDs(t *testing.T) (rows, dirs []string) {
+	t.Helper()
+	snaps, err := f.pub.Store.Snapshots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range snaps {
+		rows = append(rows, s.ID)
+	}
+	entries, err := os.ReadDir(filepath.Join(f.root, "snapshots"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		dirs = append(dirs, e.Name())
+	}
+	return rows, dirs
+}
+
+// current returns the snapshot public/current points to.
+func (f *fixture) current(t *testing.T) string {
+	t.Helper()
+	target, err := os.Readlink(filepath.Join(f.root, "public", "current"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Base(target)
+}
+
+// A publish that fails before public/current switches leaves nothing
+// behind, so retries cannot push served snapshots out of retention.
+func TestFailedPublishLeavesNoSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Storage.SnapshotRetention = 3
+	f.cfg.Storage.GCGrace = 0
+	f.add(t, "app", "1.0", "amd64")
+	s1 := f.publish(t)
+	f.add(t, "app", "2.0", "amd64")
+	s2 := f.publish(t)
+	for range 3 {
+		f.failPublish(t) // as the scheduler retries
+	}
+	rows, dirs := f.snapshotIDs(t)
+	want := []string{s2.ID, s1.ID}
+	if !slices.Equal(rows, want) {
+		t.Errorf("snapshot rows %v, want %v", rows, want)
+	}
+	if !slices.Equal(dirs, []string{s1.ID, s2.ID}) { // ULIDs sort by time
+		t.Errorf("snapshot directories %v, want %v", dirs, []string{s1.ID, s2.ID})
+	}
+	res, err := f.pub.GC(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Snapshots) != 0 {
+		t.Errorf("GC collected %v, want both served snapshots kept", res.Snapshots)
+	}
+	if cur := f.current(t); cur != s2.ID {
+		t.Errorf("current = %s, want %s", cur, s2.ID)
+	}
+}
+
+// A publish can fail after the swap (the directory sync or SetCurrent).
+// public/current then serves the snapshot, so discard must keep it.
+func TestDiscardKeepsLinkedSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.add(t, "app", "1.0", "amd64")
+	s := f.publish(t)
+	f.pub.discard(context.Background(), s.ID)
+	rows, dirs := f.snapshotIDs(t)
+	if !slices.Equal(rows, []string{s.ID}) || !slices.Equal(dirs, []string{s.ID}) {
+		t.Errorf("rows %v, directories %v; want the linked snapshot %s kept", rows, dirs, s.ID)
 	}
 }
 

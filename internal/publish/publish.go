@@ -305,10 +305,20 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 		return nil, err
 	}
 	ok = true
-	if err := fsutil.SyncDir(p.snapshotsDir()); err != nil {
+	if err := p.activate(ctx, cfg, snap, pkgs); err != nil {
+		p.discard(ctx, snap.ID)
 		return nil, err
 	}
+	snap.IsCurrent = true
+	p.Log.Info("published", "snapshot", snap.ID, "packages", len(pkgs), "duration", time.Since(start).Round(time.Millisecond))
+	return snap, nil
+}
 
+// activate records a rendered snapshot and makes it current.
+func (p *Publisher) activate(ctx context.Context, cfg *config.Config, snap *store.Snapshot, pkgs []*format.Package) error {
+	if err := fsutil.SyncDir(p.snapshotsDir()); err != nil {
+		return err
+	}
 	entries := make([]store.SnapshotEntry, len(pkgs))
 	for i, pk := range pkgs {
 		entries[i] = store.SnapshotEntry{PackageID: pk.ID, Distribution: pk.Distribution, ServedSHA256: pk.ServedSHA256()}
@@ -316,21 +326,34 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 	if err := p.Store.Tx(ctx, func(q *store.Queries) error {
 		return q.InsertSnapshot(ctx, snap, entries)
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	if err := p.reconcileLinks(cfg); err != nil {
-		return nil, err
+		return err
 	}
 	// The one swap point (sections 9 and 18).
 	if err := fsutil.Symlink(filepath.Join("..", "snapshots", snap.ID), filepath.Join(p.publicDir(), "current")); err != nil {
-		return nil, fmt.Errorf("switch current: %w", err)
+		return fmt.Errorf("switch current: %w", err)
 	}
-	if err := p.Store.Tx(ctx, func(q *store.Queries) error { return q.SetCurrent(ctx, snap.ID) }); err != nil {
-		return nil, err
+	return p.Store.Tx(ctx, func(q *store.Queries) error { return q.SetCurrent(ctx, snap.ID) })
+}
+
+// discard removes the row and directory of a snapshot whose publish
+// failed, so retries do not fill snapshot_retention with snapshots that
+// were never served. One public/current already points to stays: the
+// swap happened, and Reconcile marks it current at the next start.
+func (p *Publisher) discard(ctx context.Context, id string) {
+	target, err := os.Readlink(filepath.Join(p.publicDir(), "current"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) || filepath.Base(target) == id {
+		return
 	}
-	snap.IsCurrent = true
-	p.Log.Info("published", "snapshot", snap.ID, "packages", len(pkgs), "duration", time.Since(start).Round(time.Millisecond))
-	return snap, nil
+	if err := p.Store.DeleteSnapshot(ctx, id); err != nil {
+		p.Log.Error("cannot remove the snapshot of a failed publish", "snapshot", id, "err", err)
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(p.snapshotsDir(), id)); err != nil {
+		p.Log.Error("cannot remove the snapshot of a failed publish", "snapshot", id, "err", err)
+	}
 }
 
 // history returns the snapshots whose index files the new snapshot must
