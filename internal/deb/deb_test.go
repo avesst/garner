@@ -121,6 +121,11 @@ func TestReadInvalid(t *testing.T) {
 		{"unknown member", buildDeb(t, debMember{"control.tar", good}, debMember{"extra", nil}), "unexpected member"},
 		{"bzip2 control", buildDeb(t, debMember{"control.tar.bz2", good}), "unsupported control"},
 		{"no control file", buildDeb(t, debMember{"control.tar", controlTar(t, "./md5sums", "")}), "no control file"},
+		// dpkg extracts the whole archive, so the last control wins; garner
+		// would read the first and check ownership of the wrong name.
+		{"two control files", buildDeb(t, debMember{"control.tar", tarFiles(t,
+			"./control", testControl,
+			"control", strings.Replace(testControl, "Package: tool", "Package: other", 1))}), "more than one control file"},
 		{"corrupt gzip", buildDeb(t, debMember{"control.tar.gz", []byte("not gzip")}), "control.tar.gz"},
 		{"missing version", withControl("Package: tool\nArchitecture: amd64\n"), "missing Version"},
 		{"bad version", withControl("Package: tool\nVersion: v1\nArchitecture: amd64\n"), "start with a digit"},
@@ -257,13 +262,22 @@ func rawAr(t *testing.T, members ...debMember) []byte {
 
 func controlTar(t *testing.T, name, content string) []byte {
 	t.Helper()
+	return tarFiles(t, name, content)
+}
+
+// tarFiles returns a tar with one regular file per name and content pair.
+func tarFiles(t *testing.T, nameContent ...string) []byte {
+	t.Helper()
 	var b bytes.Buffer
 	tw := tar.NewWriter(&b)
-	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.WriteString(tw, content); err != nil {
-		t.Fatal(err)
+	for i := 0; i+1 < len(nameContent); i += 2 {
+		name, content := nameContent[i], nameContent[i+1]
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(tw, content); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)

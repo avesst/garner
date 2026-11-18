@@ -182,17 +182,26 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 		return nil, fmt.Errorf("unsupported control member control.tar%s", suffix)
 	}
 
+	// Read to the end: dpkg extracts every entry, so a later control
+	// would replace the one checked here.
 	tr := tar.NewReader(&limitedReader{r: dr, n: maxControlTar})
+	var control Paragraph
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil, errors.New("control.tar has no control file")
+			if control == nil {
+				return nil, errors.New("control.tar has no control file")
+			}
+			return control, nil
 		}
 		if err != nil {
 			return nil, fmt.Errorf("control.tar: %w", err)
 		}
 		if path.Clean(h.Name) != "control" {
 			continue
+		}
+		if control != nil {
+			return nil, errors.New("control.tar has more than one control file")
 		}
 		if h.Typeflag != tar.TypeReg {
 			return nil, errors.New("control.tar: control is not a regular file")
@@ -204,11 +213,10 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 		if err != nil {
 			return nil, fmt.Errorf("control.tar: %w", err)
 		}
-		p, err := ParseParagraph(data)
+		control, err = ParseParagraph(data)
 		if err != nil {
 			return nil, fmt.Errorf("control: %w", err)
 		}
-		return p, nil
 	}
 }
 
