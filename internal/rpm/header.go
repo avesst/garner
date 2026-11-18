@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -19,6 +20,7 @@ const (
 	tagSummary   = 1004
 	tagArch      = 1022
 	tagSourceRPM = 1044
+	tagObsoletes = 1090 // OBSOLETENAME
 )
 
 // Header value types.
@@ -58,6 +60,8 @@ type Package struct {
 	Arch      string
 	Summary   string
 	SourceRPM string
+	// Obsoletes holds the obsoleted names that can be package names.
+	Obsoletes []string
 }
 
 // ReadHeader reads the lead, the signature header and the main header of
@@ -95,6 +99,13 @@ func ReadHeader(r io.Reader) (*Package, error) {
 	if e, ok := tags.int(tagEpoch); ok {
 		p.Epoch = e
 	}
+	// A file path or capability such as perl(Foo) cannot be the name of a
+	// package garner serves, so it needs no owner.
+	for _, name := range tags.strs(tagObsoletes) {
+		if nameRE.MatchString(name) && !slices.Contains(p.Obsoletes, name) {
+			p.Obsoletes = append(p.Obsoletes, name)
+		}
+	}
 	switch {
 	case p.Name == "" || p.Version == "" || p.Release == "" || p.Arch == "":
 		return nil, errors.New("rpm header lacks name, version, release or arch")
@@ -118,6 +129,11 @@ type tagValues map[int32]any
 
 func (t tagValues) str(tag int32) string {
 	s, _ := t[tag].(string)
+	return s
+}
+
+func (t tagValues) strs(tag int32) []string {
+	s, _ := t[tag].([]string)
 	return s
 }
 
@@ -159,21 +175,38 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 		off := binary.BigEndian.Uint32(e[8:12])
 		count := binary.BigEndian.Uint32(e[12:16])
 		switch tag {
-		case tagName, tagVersion, tagRelease, tagEpoch, tagSummary, tagArch, tagSourceRPM:
+		case tagName, tagVersion, tagRelease, tagEpoch, tagSummary, tagArch, tagSourceRPM, tagObsoletes:
 		default:
 			continue
 		}
 		if uint64(off) >= uint64(len(data)) {
 			return 0, nil, fmt.Errorf("tag %d: offset out of range", tag)
 		}
-		switch typ {
-		case typeString, typeI18NString, typeStringArray:
+		switch {
+		case tag == tagObsoletes && typ == typeStringArray:
+			// count strings, each NUL-terminated; each takes a byte at least.
+			if uint64(count) > uint64(len(data)) {
+				return 0, nil, fmt.Errorf("tag %d: bad count", tag)
+			}
+			rest, names := data[off:], make([]string, 0, count)
+			for range count {
+				end := bytes.IndexByte(rest, 0)
+				if end < 0 {
+					return 0, nil, fmt.Errorf("tag %d: unterminated string", tag)
+				}
+				names = append(names, string(rest[:end]))
+				rest = rest[end+1:]
+			}
+			tags[tag] = names
+		case tag == tagObsoletes:
+			return 0, nil, fmt.Errorf("tag %d: type %d, want a string array", tag, typ)
+		case typ == typeString, typ == typeI18NString, typ == typeStringArray:
 			end := bytes.IndexByte(data[off:], 0)
 			if end < 0 {
 				return 0, nil, fmt.Errorf("tag %d: unterminated string", tag)
 			}
 			tags[tag] = string(data[off : off+uint32(end)])
-		case typeInt32:
+		case typ == typeInt32:
 			if count < 1 || uint64(off)+4 > uint64(len(data)) {
 				return 0, nil, fmt.Errorf("tag %d: bad int32", tag)
 			}

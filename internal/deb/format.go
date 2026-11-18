@@ -71,6 +71,7 @@ func (Format) Parse(f *os.File) (*format.Parsed, error) {
 		Epoch:    int(p.Version.Epoch),
 		Version:  version,
 		Arch:     p.Arch,
+		Replaces: p.Replaces,
 		Metadata: raw,
 	}, nil
 }

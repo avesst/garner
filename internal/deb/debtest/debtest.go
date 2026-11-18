@@ -13,8 +13,14 @@ import (
 // payload. Different
 // payloads give different files for the same control.
 func Build(name, version, arch, payload string) []byte {
-	control := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: Test <test@example.com>\nDescription: test package %s\n",
-		name, version, arch, name)
+	return BuildWith(name, version, arch, payload, "")
+}
+
+// BuildWith is Build with extra control fields, such as
+// "Replaces: other\n".
+func BuildWith(name, version, arch, payload, fields string) []byte {
+	control := fmt.Sprintf("Package: %s\nVersion: %s\nArchitecture: %s\nMaintainer: Test <test@example.com>\n%sDescription: test package %s\n",
+		name, version, arch, fields, name)
 	var ctl bytes.Buffer
 	zw := gzip.NewWriter(&ctl)
 	writeTar(zw, "./control", control)

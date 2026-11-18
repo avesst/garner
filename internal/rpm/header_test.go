@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -29,7 +31,7 @@ func TestReadHeader(t *testing.T) {
 			t.Errorf("%s: %v", tt.file, err)
 			continue
 		}
-		if *got != tt.want {
+		if !reflect.DeepEqual(*got, tt.want) {
 			t.Errorf("%s: got %+v, want %+v", tt.file, *got, tt.want)
 		}
 	}
@@ -57,6 +59,8 @@ func TestReadHeaderInvalid(t *testing.T) {
 		{"truncated header", good[:200], "truncated"},
 		{"source rpm", source, "source rpms"},
 		{"huge header", huge, "too large"},
+		{"obsoletes not an array", fakeRPM(map[int32]string{tagName: "a", tagVersion: "1", tagRelease: "1",
+			tagArch: "noarch", tagSourceRPM: "a-1-1.src.rpm", tagObsoletes: "b"}), "want a string array"},
 	}
 	for _, tt := range tests {
 		_, err := ReadHeader(bytes.NewReader(tt.data))
@@ -134,4 +138,26 @@ func fakeRPM(tags map[int32]string) []byte {
 	}
 	header(index, data)
 	return b.Bytes()
+}
+
+// Obsoletes become Replaces; Provides do not. Expected names are from
+// rpm -qp --obsoletes on the fixture.
+func TestParseObsoletes(t *testing.T) {
+	for file, want := range map[string][]string{
+		"testdata/garner-renamed-1.0-1.noarch.rpm": {"garner-hello", "garner-old"},
+		"testdata/garner-hello-1.0-1.noarch.rpm":   nil,
+	} {
+		f, err := os.Open(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := (&Format{}).Parse(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		if !slices.Equal(p.Replaces, want) {
+			t.Errorf("%s: Replaces = %q, want %q", file, p.Replaces, want)
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,9 @@ type Package struct {
 	Name    string
 	Version Version
 	Arch    string
-	Control Paragraph
+	// Replaces holds the package names of the Replaces field.
+	Replaces []string
+	Control  Paragraph
 }
 
 var (
@@ -135,7 +138,32 @@ func newPackage(control Paragraph) (*Package, error) {
 	if !archRE.MatchString(p.Arch) {
 		return nil, fmt.Errorf("control: invalid architecture %q", p.Arch)
 	}
+	if v, ok := control.Get("Replaces"); ok {
+		if p.Replaces, err = relationNames(v); err != nil {
+			return nil, fmt.Errorf("control: Replaces: %w", err)
+		}
+	}
 	return p, nil
+}
+
+// relationNames returns the package names of a relationship field such as
+// "a (<< 2.0), b:any | c", without versions, architecture qualifiers or
+// restrictions.
+func relationNames(field string) ([]string, error) {
+	var out []string
+	for _, rel := range strings.FieldsFunc(field, func(r rune) bool { return r == ',' || r == '|' }) {
+		name := strings.TrimSpace(rel)
+		if i := strings.IndexAny(name, " \t\n(:[<"); i >= 0 {
+			name = name[:i]
+		}
+		if !nameRE.MatchString(name) {
+			return nil, fmt.Errorf("invalid package name in %q", strings.TrimSpace(rel))
+		}
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out, nil
 }
 
 // readControl decompresses a control.tar member and parses its control

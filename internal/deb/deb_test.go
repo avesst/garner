@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -134,6 +135,7 @@ func TestReadInvalid(t *testing.T) {
 		{"two paragraphs", withControl("Package: tool\n\nPackage: other\n"), "more than one paragraph"},
 		{"duplicate field", withControl("Package: tool\npackage: tool\n"), "duplicate field"},
 		{"no colon", withControl("Package tool\n"), "missing ':'"},
+		{"bad replaces", withControl("Package: tool\nVersion: 1\nArchitecture: amd64\nReplaces: Old Tool\n"), "Replaces"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -142,6 +144,18 @@ func TestReadInvalid(t *testing.T) {
 				t.Errorf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestReadReplaces(t *testing.T) {
+	control := strings.Replace(testControl, "Installed-Size: 12\n",
+		"Installed-Size: 12\nReplaces: old-tool (<< 1.4), tool-data:any,\n tool-doc [amd64], old-tool\n", 1)
+	p, err := Read(bytes.NewReader(buildDeb(t, debMember{"control.tar", controlTar(t, "./control", control)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"old-tool", "tool-data", "tool-doc"}; !slices.Equal(p.Replaces, want) {
+		t.Errorf("Replaces = %q, want %q", p.Replaces, want)
 	}
 }
 

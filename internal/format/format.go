@@ -23,6 +23,10 @@ type Parsed struct {
 	Version string
 	Release string // "" for formats without one
 	Arch    string // "" for formats without one
+	// Replaces names the packages this one takes the place of on clients
+	// (deb Replaces, rpm Obsoletes). Ownership applies to them as to Name
+	// (section 8).
+	Replaces []string
 	// Metadata is format-specific and stored as JSON.
 	Metadata json.RawMessage
 }

@@ -532,6 +532,14 @@ types.
   source (`source:tool`). Ownership follows the label, not the token, so
   rotating tokens keeps ownership.
 - First delivery of an unowned name assigns ownership.
+- A package also needs the names it replaces on clients: deb `Replaces` and
+  rpm `Obsoletes`. They are checked like the package's own name, and a free
+  one is assigned to the uploader. A name of another owner gives the same
+  `409` or held state as an upload of that name. This keeps an owner of
+  `a` from shipping `Obsoletes: b`, which dnf would apply on a plain
+  upgrade. `Provides` is not checked: virtual names such as `webserver`
+  have many providers, and clients prefer a real package of that name.
+  Packages stored before this rule are not re-checked.
 - `owns:` globs in a source reserve names. On reload, a reservation that
   conflicts with an existing database owner wins for future deliveries.
   Existing packages stay, and the conflict is reported.

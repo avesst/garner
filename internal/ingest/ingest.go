@@ -185,6 +185,23 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		if err != nil {
 			return err
 		}
+		// Replacing a package on clients needs its name as much as
+		// shipping it does; a free name is claimed the same way.
+		for _, name := range parsed.Replaces {
+			if ownerConflict != "" {
+				break
+			}
+			if name == parsed.Name {
+				continue
+			}
+			c, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), name, req.Owner)
+			if err != nil {
+				return err
+			}
+			if c != "" {
+				ownerConflict = "replaces another owner's package: " + c
+			}
+		}
 		if ownerConflict != "" {
 			if !req.HoldOnOwnerConflict {
 				return conflict("%s", ownerConflict)

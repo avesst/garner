@@ -81,7 +81,7 @@ func (*Format) Parse(f *os.File) (*format.Parsed, error) {
 		return nil, err
 	}
 	return &format.Parsed{Name: p.Name, Epoch: p.Epoch, Version: p.Version, Release: p.Release,
-		Arch: p.Arch, Metadata: raw}, nil
+		Arch: p.Arch, Replaces: p.Obsoletes, Metadata: raw}, nil
 }
 
 func (*Format) Compare(a, b *format.Package) int {

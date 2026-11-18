@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/avesst/garner/internal/blob"
@@ -159,6 +160,61 @@ func TestOwnership(t *testing.T) {
 	cs, err := f.in.Store.Conflicts(context.Background(), false)
 	if err != nil || len(cs) != 1 {
 		t.Errorf("conflicts = %v, %v; want 1", cs, err)
+	}
+}
+
+// A package that replaces another owner's package on clients (deb
+// Replaces, rpm Obsoletes) is refused like an upload of that name.
+func TestOwnershipOfReplacedNames(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.upload(t, debtest.Build("victim", "1.0", "amd64", "b"), "", "team-b"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.upload(t, debtest.BuildWith("mine", "1.0", "amd64", "a", "Replaces: victim (<< 2.0)\n"), "", "team-a")
+	wantKind(t, err, Conflict)
+	if !strings.Contains(err.Error(), `"victim"`) || !strings.Contains(err.Error(), "team-b") {
+		t.Errorf("err = %v, want it to name victim and its owner", err)
+	}
+	pkgs, _ := f.in.Store.Placed(context.Background(), store.PackageFilter{Name: "mine"})
+	if len(pkgs) != 0 {
+		t.Errorf("refused package was stored: %+v", pkgs)
+	}
+	if _, err := f.in.Store.Owner(context.Background(), "os", "mine"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("refused package claimed its name: %v", err)
+	}
+}
+
+func TestOwnershipOfReplacedNamesAllowedAndClaimed(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	// A rename within one owner.
+	if _, err := f.upload(t, debtest.Build("old-name", "1.0", "amd64", "a"), "", "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.upload(t, debtest.BuildWith("new-name", "1.0", "amd64", "a", "Replaces: old-name\n"), "", "team-a"); err != nil {
+		t.Fatalf("replacing an own package: %v", err)
+	}
+
+	// A free name is claimed, so its later upload by someone else fails.
+	if _, err := f.upload(t, debtest.BuildWith("mine", "1.0", "amd64", "a", "Replaces: victim\n"), "", "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := f.in.Store.Owner(ctx, "os", "victim"); err != nil || o.Owner != "team-a" {
+		t.Errorf("owner of victim = %+v, %v; want team-a", o, err)
+	}
+	_, err := f.upload(t, debtest.Build("victim", "1.0", "amd64", "b"), "", "team-b")
+	wantKind(t, err, Conflict)
+
+	// A sync is stored held, with a conflict.
+	res, err := f.in.Ingest(ctx, bytes.NewReader(debtest.BuildWith("synced", "1.0", "amd64", "s", "Replaces: mine\n")), Request{
+		Owner: SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != store.Held || !strings.Contains(res.Conflict, `"mine"`) {
+		t.Errorf("sync replacing a foreign name = %+v, want held with a conflict naming mine", res)
 	}
 }
 
