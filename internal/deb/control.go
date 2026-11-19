@@ -32,6 +32,15 @@ func (p Paragraph) Get(name string) (string, bool) {
 // paragraph is an error.
 func ParseParagraph(data []byte) (Paragraph, error) {
 	var p Paragraph
+	seen := map[string]bool{} // lower-cased field names
+	// The last field's value is built here and stored when the field
+	// ends: appending to a string would copy it once per line.
+	var value strings.Builder
+	flush := func() {
+		if len(p) > 0 {
+			p[len(p)-1].Value = value.String()
+		}
+	}
 	ended := false
 	for n, line := range strings.Split(string(bytes.TrimRight(data, "\n")), "\n") {
 		lineNo := n + 1
@@ -46,21 +55,29 @@ func ParseParagraph(data []byte) (Paragraph, error) {
 			if len(p) == 0 {
 				return nil, fmt.Errorf("line %d: continuation line before the first field", lineNo)
 			}
-			p[len(p)-1].Value += "\n" + strings.TrimRight(line, " \t\r")
+			value.WriteString("\n")
+			value.WriteString(strings.TrimRight(line, " \t\r"))
 			continue
 		}
-		name, value, ok := strings.Cut(line, ":")
+		name, v, ok := strings.Cut(line, ":")
 		if !ok {
 			return nil, fmt.Errorf("line %d: missing ':' after field name", lineNo)
 		}
 		if !validFieldName(name) {
 			return nil, fmt.Errorf("line %d: invalid field name %q", lineNo, name)
 		}
-		if _, dup := p.Get(name); dup {
+		// validFieldName allows ASCII only, so ToLower matches Get's EqualFold.
+		key := strings.ToLower(name)
+		if seen[key] {
 			return nil, fmt.Errorf("line %d: duplicate field %q", lineNo, name)
 		}
-		p = append(p, Field{Name: name, Value: strings.TrimSpace(value)})
+		seen[key] = true
+		flush()
+		value.Reset()
+		value.WriteString(strings.TrimSpace(v))
+		p = append(p, Field{Name: name})
 	}
+	flush()
 	if len(p) == 0 {
 		return nil, fmt.Errorf("empty control paragraph")
 	}
