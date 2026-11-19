@@ -106,8 +106,13 @@ Scope:
 .TP
 .B approve \fIPACKAGE_ID\fR
 Release a held package.
+Fails when another file of the same version is already in the
+distribution.
 Scope:
-.BR publish .
+.BR publish ;
+a package held because its deliverer does not own the name needs
+.B admin
+as well.
 .TP
 .BR "conflicts list" " [" \-\-all ]
 Show open conflicts, or all with

@@ -523,7 +523,8 @@ not trusted.
 
 **Approval.** With `approval: manual`, new packages are stored with placement
 state `held` until `garner approve`. The default is `auto` for all source
-types.
+types. Approval applies the content check of section 7: it fails with `409`
+when another file of the same version is already in the distribution.
 
 ## 8. Package name ownership
 
@@ -553,7 +554,8 @@ types.
 - Sync delivery of a name owned by someone else: the package is stored as
   `held` and a conflict is recorded. It claims none of its names, and until
   it is approved it does not take part in the content check (section 7), so
-  the owner can still deliver that version.
+  the owner can still deliver that version. Approving it publishes it under
+  another owner's name, so it needs the `admin` scope as well as `publish`.
 - `garner owner set <name> <owner>` (admin scope) transfers ownership. Admin
   tokens do not bypass ownership implicitly.
 
@@ -661,7 +663,8 @@ says which tools are missing.
 - Reading is open. The network is the boundary.
 - Writes require a token. Scopes:
   - `upload`: add packages;
-  - `publish`: trigger publish and sync, approve held packages, roll back;
+  - `publish`: trigger publish and sync, approve held packages (a package
+    held for an ownership conflict also needs `admin`), roll back;
   - `admin`: remove packages, manage owners and tokens, reload.
 - Tokens are shown once at creation and stored as sha256 hashes.
   `garner init` prints an initial admin token.
@@ -739,7 +742,7 @@ the configuration and database are reachable. The others call the API with
 | `sync SOURCE` | API | publish |
 | `publish` | API | publish |
 | `packages list` | API | none |
-| `approve PACKAGE` / `conflicts list` | API | publish |
+| `approve PACKAGE` / `conflicts list` | API | publish (approving an ownership hold: publish and admin) |
 | `snapshot list` / `snapshot rollback ID` | API | publish |
 | `gc` | API | admin |
 | `status` | API | none |
@@ -756,7 +759,7 @@ the configuration and database are reachable. The others call the API with
 | `PUT /api/v1/owners/{name}` | admin |
 | `POST /api/v1/sources/{name}/sync` | publish |
 | `GET /api/v1/conflicts` | publish |
-| `POST /api/v1/packages/{id}/approve` | publish |
+| `POST /api/v1/packages/{id}/approve` | publish; publish and admin for an ownership hold |
 | `GET /api/v1/snapshots` | none |
 | `POST /api/v1/snapshots/{id}/rollback` | publish |
 | `POST /api/v1/reload` | admin |

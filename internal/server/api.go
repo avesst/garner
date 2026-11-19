@@ -238,6 +238,12 @@ func (s *Server) removePackage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, removed)
 }
 
+// errApproveConflict and errApproveNeedsAdmin roll back a refused approve.
+var (
+	errApproveConflict   = errors.New("approve: content conflict")
+	errApproveNeedsAdmin = errors.New("approve: needs admin")
+)
+
 func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pkgs, err := s.Store.Placed(ctx, store.PackageFilter{ID: r.PathValue("id"), States: []string{store.Held}})
@@ -249,14 +255,48 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no held package with that id")
 		return
 	}
+	var conflict string
+	admin := auth.HasScope(tokenFrom(r), auth.ScopeAdmin)
 	err = s.Store.Tx(ctx, func(q *store.Queries) error {
 		for _, p := range pkgs {
+			// Approving makes the package decide its version, so it must
+			// pass the content check of section 7 like a new delivery.
+			ident := store.Identity{Format: p.Format, Name: p.Name, Epoch: p.Epoch,
+				Version: p.Version, Release: p.Release, Arch: p.Arch}
+			variants, err := q.PlacedVariants(ctx, ident, p.Distribution)
+			if err != nil {
+				return err
+			}
+			// A hold whose deliverer does not own the name publishes it
+			// under another owner's name: an admin decision (section 8).
+			for _, v := range variants {
+				if v.ID == p.ID && v.OwnerConflict && !admin {
+					return errApproveNeedsAdmin
+				}
+			}
+			for _, v := range variants {
+				if v.ID != p.ID && v.BlobSHA256 != p.BlobSHA256 && v.DecidesVersion() {
+					conflict = fmt.Sprintf("%s %s is already in %s with different content (sha256 %s)",
+						p.Name, p.Version, p.Distribution, v.BlobSHA256)
+					return errApproveConflict
+				}
+			}
 			if _, err := q.SetState(ctx, p.ID, p.Distribution, store.Active); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if errors.Is(err, errApproveNeedsAdmin) {
+		writeError(w, http.StatusForbidden, fmt.Sprintf(
+			"%s is held because its deliverer does not own the name; approving it needs the %s scope too",
+			pkgs[0].Name, auth.ScopeAdmin))
+		return
+	}
+	if errors.Is(err, errApproveConflict) {
+		writeError(w, http.StatusConflict, conflict)
+		return
+	}
 	if err != nil {
 		s.internal(w, err)
 		return

@@ -38,6 +38,7 @@ type fixture struct {
 	cfg     *config.Config
 	h       http.Handler
 	st      *store.Store
+	in      *ingest.Ingester
 	secrets map[string]string
 }
 
@@ -74,9 +75,11 @@ func newFixture(t *testing.T) *fixture {
 			Signer: func() signing.Signer { return keys }, Root: root, Log: log},
 	}
 	f.h = s.Handler()
+	f.in = s.Ingester
 	for name, scopes := range map[string][]string{
 		"up": {auth.ScopeUpload}, "pub": {auth.ScopePublish}, "adm": {auth.ScopeAdmin},
-		"other": {auth.ScopeUpload},
+		"pubadm": {auth.ScopePublish, auth.ScopeAdmin},
+		"other":  {auth.ScopeUpload},
 	} {
 		owner := "team"
 		if name == "other" {
@@ -235,5 +238,75 @@ func TestTrustedProxyPrefix(t *testing.T) {
 	r.RemoteAddr = "[::ffff:10.1.2.3]:80"
 	if !auth.FromTrustedProxy(pol, r) {
 		t.Error("IPv4-mapped IPv6 address not matched against an IPv4 prefix")
+	}
+}
+
+// Approving a package held for an ownership conflict must not put a second
+// file of a version into a distribution where the owner has delivered it.
+func TestApproveRechecksContent(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if w := f.do(http.MethodPut, "/api/v1/upload", "up", debtest.Build("app", "1.0", "amd64", "a"), ""); w.Code != http.StatusOK {
+		t.Fatalf("upload: HTTP %d: %s", w.Code, w.Body)
+	}
+	foreign, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("app", "2.0", "amd64", "squat")), ingest.Request{
+		Owner: ingest.SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil || foreign.State != store.Held {
+		t.Fatalf("foreign sync = %+v, %v; want held", foreign, err)
+	}
+	if w := f.do(http.MethodPut, "/api/v1/upload", "up", debtest.Build("app", "2.0", "amd64", "real"), ""); w.Code != http.StatusOK {
+		t.Fatalf("owner's upload: HTTP %d: %s", w.Code, w.Body)
+	}
+
+	w := f.do(http.MethodPost, "/api/v1/packages/"+foreign.Package.ID+"/approve", "pubadm", nil, "")
+	if w.Code != http.StatusConflict {
+		t.Errorf("approve: HTTP %d, want 409: %s", w.Code, w.Body)
+	}
+	held, err := f.st.Placed(ctx, store.PackageFilter{ID: foreign.Package.ID, States: []string{store.Held}})
+	if err != nil || len(held) != 1 {
+		t.Errorf("foreign package after a refused approve = %v, %v; want still held", held, err)
+	}
+}
+
+// Approving a package held because its deliverer does not own the name
+// publishes it under another owner's name, so it needs the admin scope as
+// well (section 8).
+func TestApproveOwnershipHoldNeedsAdmin(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if w := f.do(http.MethodPut, "/api/v1/upload", "up", debtest.Build("app", "1.0", "amd64", "a"), ""); w.Code != http.StatusOK {
+		t.Fatalf("upload: HTTP %d: %s", w.Code, w.Body)
+	}
+	foreign, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("app", "2.0", "amd64", "squat")), ingest.Request{
+		Owner: ingest.SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil || foreign.State != store.Held {
+		t.Fatalf("foreign sync = %+v, %v; want held", foreign, err)
+	}
+	// A hold for approval by the name's owner needs publish alone.
+	own, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("app", "3.0", "amd64", "a")), ingest.Request{
+		Owner: "team", Origin: "upload", OriginRef: "x", VerifyStatus: "n/a", Held: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approve := func(id, token string) int {
+		return f.do(http.MethodPost, "/api/v1/packages/"+id+"/approve", token, nil, "").Code
+	}
+	if code := approve(foreign.Package.ID, "pub"); code != http.StatusForbidden {
+		t.Errorf("approve of an ownership hold with publish alone: HTTP %d, want 403", code)
+	}
+	if held, _ := f.st.Placed(ctx, store.PackageFilter{ID: foreign.Package.ID, States: []string{store.Held}}); len(held) != 1 {
+		t.Errorf("ownership hold after a refused approve = %v; want still held", held)
+	}
+	if code := approve(foreign.Package.ID, "pubadm"); code != http.StatusOK {
+		t.Errorf("approve of an ownership hold with publish and admin: HTTP %d, want 200", code)
+	}
+	if code := approve(own.Package.ID, "pub"); code != http.StatusOK {
+		t.Errorf("approve of the owner's hold with publish: HTTP %d, want 200", code)
 	}
 }
