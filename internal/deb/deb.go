@@ -211,12 +211,18 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 	}
 
 	// Read to the end: dpkg extracts every entry, so a later control
-	// would replace the one checked here.
+	// would replace the one checked here. The member names must also map
+	// to files the way GNU tar, which dpkg-deb extracts with, maps them;
+	// see controlMembers.
 	tr := tar.NewReader(&limitedReader{r: dr, n: maxControlTar})
 	var control Paragraph
+	members := controlMembers{}
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
+			if err := members.check(); err != nil {
+				return nil, err
+			}
 			if control == nil {
 				return nil, errors.New("control.tar has no control file")
 			}
@@ -225,11 +231,12 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 		if err != nil {
 			return nil, fmt.Errorf("control.tar: %w", err)
 		}
-		if path.Clean(h.Name) != "control" {
-			continue
+		name, err := members.add(h)
+		if err != nil {
+			return nil, err
 		}
-		if control != nil {
-			return nil, errors.New("control.tar has more than one control file")
+		if name != "control" {
+			continue
 		}
 		if h.Typeflag != tar.TypeReg {
 			return nil, errors.New("control.tar: control is not a regular file")
@@ -246,6 +253,59 @@ func readControl(r io.Reader, suffix string) (Paragraph, error) {
 			return nil, fmt.Errorf("control: %w", err)
 		}
 	}
+}
+
+// controlMembers tracks control.tar member names so that path.Clean of a
+// name is the file GNU tar extracts it to. GNU tar strips a leading "/",
+// refuses names with "..", follows symlinks it extracted earlier, and
+// overwrites a file extracted earlier under the same name. dpkg-deb never
+// builds any of these, so they are rejected rather than mapped.
+type controlMembers struct {
+	seen     map[string]bool
+	names    []string
+	symlinks map[string]bool
+}
+
+// add records a member and returns its cleaned name.
+func (m *controlMembers) add(h *tar.Header) (string, error) {
+	if strings.HasPrefix(h.Name, "/") {
+		return "", fmt.Errorf("control.tar member %q is absolute", h.Name)
+	}
+	if slices.Contains(strings.Split(h.Name, "/"), "..") {
+		return "", fmt.Errorf("control.tar member %q contains '..'", h.Name)
+	}
+	name := path.Clean(h.Name)
+	if name == "." {
+		return name, nil
+	}
+	if m.seen == nil {
+		m.seen, m.symlinks = map[string]bool{}, map[string]bool{}
+	}
+	if m.seen[name] {
+		if name == "control" {
+			return "", errors.New("control.tar has more than one control file")
+		}
+		return "", fmt.Errorf("control.tar has %s more than once", name)
+	}
+	m.seen[name] = true
+	m.names = append(m.names, name)
+	if h.Typeflag == tar.TypeSymlink {
+		m.symlinks[name] = true
+	}
+	return name, nil
+}
+
+// check rejects a member below a symlink member, in either order: tar
+// would write it through the symlink, to another name.
+func (m *controlMembers) check() error {
+	for _, name := range m.names {
+		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
+			if m.symlinks[dir] {
+				return fmt.Errorf("control.tar member %q is under symlink %q", name, dir)
+			}
+		}
+	}
+	return nil
 }
 
 // limitedReader is io.LimitReader with an error instead of a silent EOF,

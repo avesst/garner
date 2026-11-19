@@ -77,6 +77,20 @@ func TestReadDpkgDebBuilt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "usr/bin/tool"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// dpkg-deb archives symlinked maintainer scripts and subdirectories
+	// of DEBIAN as they are; they must stay accepted.
+	if err := os.WriteFile(filepath.Join(src, "DEBIAN/postinst"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("postinst", filepath.Join(src, "DEBIAN/prerm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "DEBIAN/extra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "DEBIAN/extra/notes"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	for _, z := range []string{"none", "gzip", "xz", "zstd"} {
 		t.Run(z, func(t *testing.T) {
 			out := filepath.Join(root, z+".deb")
@@ -140,6 +154,86 @@ func TestReadInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Read(bytes.NewReader(tt.deb))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// TestReadControlAliases covers control.tar members that GNU tar, which
+// dpkg-deb extracts with, writes to ./control although their names do not
+// clean to "control". dpkg would install the second control file while
+// garner checked the first.
+func TestReadControlAliases(t *testing.T) {
+	other := strings.Replace(testControl, "Package: tool", "Package: other", 1)
+	reg := func(name, content string) tar.Header {
+		return tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0o644, Size: int64(len(content))}
+	}
+	sym := func(name, target string) tar.Header {
+		return tar.Header{Typeflag: tar.TypeSymlink, Name: name, Linkname: target, Mode: 0o777}
+	}
+	tests := []struct {
+		name    string
+		entries []tarEntry
+		want    string
+	}{
+		{"absolute", []tarEntry{{reg("./control", testControl), testControl}, {reg("/control", other), other}}, "absolute"},
+		{"double slash", []tarEntry{{reg("./control", testControl), testControl}, {reg("//control", other), other}}, "absolute"},
+		{"slash dot", []tarEntry{{reg("./control", testControl), testControl}, {reg("/./control", other), other}}, "absolute"},
+		{"symlinked dir", []tarEntry{{reg("./control", testControl), testControl}, {sym("./d", "."), ""}, {reg("./d/control", other), other}}, "under symlink"},
+		{"symlinked dir, unclean", []tarEntry{{reg("./control", testControl), testControl}, {sym("d", "."), ""}, {reg("d/./control", other), other}}, "under symlink"},
+	}
+	dpkgDeb, _ := exec.LookPath("dpkg-deb")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deb := buildDeb(t, debMember{"control.tar", tarEntries(t, tt.entries...)})
+			// Confirm the case is real: dpkg-deb reads a different
+			// control file than the one named "./control".
+			if dpkgDeb != "" {
+				f := filepath.Join(t.TempDir(), "x.deb")
+				if err := os.WriteFile(f, deb, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				out, err := exec.Command(dpkgDeb, "-f", f, "Package").Output()
+				if err != nil {
+					t.Fatalf("dpkg-deb -f: %v", err)
+				}
+				if got := strings.TrimSpace(string(out)); got != "other" {
+					t.Fatalf("dpkg-deb reads Package %q, want other: the case does not alias", got)
+				}
+			} else {
+				t.Log("dpkg-deb not installed: not compared")
+			}
+			_, err := Read(bytes.NewReader(deb))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadControlMemberNames(t *testing.T) {
+	reg := func(name string) tarEntry {
+		return tarEntry{tar.Header{Typeflag: tar.TypeReg, Name: name, Mode: 0o644, Size: int64(len(testControl))}, testControl}
+	}
+	tests := []struct {
+		name    string
+		entries []tarEntry
+		want    string
+	}{
+		{"dot dot", []tarEntry{reg("../control")}, "'..'"},
+		{"inner dot dot", []tarEntry{reg("./control"), reg("a/../../x")}, "'..'"},
+		{"duplicate", []tarEntry{reg("./control"), reg("./md5sums"), reg("md5sums")}, "more than once"},
+		// Rejected whatever the order, though here the later ./control
+		// overwrites what was written through the symlink.
+		{"under symlink before control", []tarEntry{
+			{tar.Header{Typeflag: tar.TypeSymlink, Name: "./d", Linkname: ".", Mode: 0o777}, ""},
+			reg("./d/control"), reg("./control")}, "under symlink"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Read(bytes.NewReader(buildDeb(t, debMember{"control.tar", tarEntries(t, tt.entries...)})))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("err = %v, want it to contain %q", err, tt.want)
 			}
@@ -290,6 +384,30 @@ func tarFiles(t *testing.T, nameContent ...string) []byte {
 			t.Fatal(err)
 		}
 		if _, err := io.WriteString(tw, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+type tarEntry struct {
+	hdr     tar.Header
+	content string
+}
+
+// tarEntries returns a tar with the given headers, written as they are.
+func tarEntries(t *testing.T, entries ...tarEntry) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	for _, e := range entries {
+		if err := tw.WriteHeader(&e.hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(tw, e.content); err != nil {
 			t.Fatal(err)
 		}
 	}
