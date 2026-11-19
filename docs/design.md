@@ -369,7 +369,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `repositories` | `id`, `name`, `signed_with` | One row (`default`) in the MVP. `signed_with` is the fingerprint of the key packages were last re-signed with. Every other table references it, so named repositories can be added without a data migration. |
 | `blobs` | `sha256` PK, `size`, `created_at` | Originals and re-signed variants. |
 | `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
-| `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `created_at` | Where a package is published. |
+| `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `owner_conflict`, `created_at` | Where a package is published. `owner_conflict` marks a hold whose deliverer did not own the name (section 8). |
 | `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`, the only one in the MVP (section 17). |
 | `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. |
 | `source_state` | `source` PK, `last_run`, `last_success`, `last_error`, `etags` (TEXT/JSON) | |
@@ -551,7 +551,9 @@ types.
 - Upload of a name owned by someone else: `409` with the owner's name; nothing
   is stored.
 - Sync delivery of a name owned by someone else: the package is stored as
-  `held` and a conflict is recorded.
+  `held` and a conflict is recorded. It claims none of its names, and until
+  it is approved it does not take part in the content check (section 7), so
+  the owner can still deliver that version.
 - `garner owner set <name> <owner>` (admin scope) transfers ownership. Admin
   tokens do not bypass ownership implicitly.
 

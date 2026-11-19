@@ -168,22 +168,28 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		}
 		for _, v := range variants {
 			if v.BlobSHA256 == b.SHA256 {
-				res.Package, res.State, res.Existing = v, v.State, true
+				res.Package, res.State, res.Existing = v.Package, v.State, true
 				return nil
 			}
 		}
-		if len(variants) > 0 {
-			return conflict("%s is already in %s with different content (sha256 %s)",
-				ref, dist, variants[0].BlobSHA256)
+		for _, v := range variants {
+			if v.DecidesVersion() {
+				return conflict("%s is already in %s with different content (sha256 %s)",
+					ref, dist, v.BlobSHA256)
+			}
 		}
 
 		state := store.Active
 		if req.Held {
 			state = store.Held
 		}
-		ownerConflict, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), parsed.Name, req.Owner)
+		ownerConflict, claim, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), parsed.Name, req.Owner)
 		if err != nil {
 			return err
+		}
+		var claims []ownerClaim
+		if claim != nil {
+			claims = append(claims, *claim)
 		}
 		// Replacing a package on clients needs its name as much as
 		// shipping it does; a free name is claimed the same way.
@@ -194,12 +200,23 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 			if name == parsed.Name {
 				continue
 			}
-			c, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), name, req.Owner)
+			c, claim, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), name, req.Owner)
 			if err != nil {
 				return err
 			}
 			if c != "" {
 				ownerConflict = "replaces another owner's package: " + c
+			} else if claim != nil {
+				claims = append(claims, *claim)
+			}
+		}
+		// Names are claimed only by a delivery that is not held for an
+		// ownership conflict.
+		if ownerConflict == "" {
+			for _, c := range claims {
+				if err := q.SetOwner(ctx, fm.Namespace(), c.name, req.Owner, c.source); err != nil {
+					return err
+				}
 			}
 		}
 		if ownerConflict != "" {
@@ -224,7 +241,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		} else if err != nil {
 			return err
 		}
-		if err := q.Place(ctx, pkg.ID, dist, state); err != nil {
+		if err := q.Place(ctx, pkg.ID, dist, state, ownerConflict != ""); err != nil {
 			return err
 		}
 		res.Package, res.State = pkg, state
@@ -345,34 +362,38 @@ func (in *Ingester) prepare(ctx context.Context, fm format.Format, sha string) (
 	return &prepared{Blob: b, f: bf}, nil
 }
 
+// ownerClaim is a name a delivery takes once all its names are checked.
+type ownerClaim struct{ name, source string }
+
 // checkOwner applies section 8. It returns a non-empty explanation when
-// the name belongs to someone else, and assigns the name when it is free.
+// the name belongs to someone else, and the claim to record when the name
+// is free or reserved for owner but not yet assigned to it.
 func (in *Ingester) checkOwner(ctx context.Context, q *store.Queries, cfg *config.Config,
-	namespace, name, owner string) (string, error) {
+	namespace, name, owner string) (string, *ownerClaim, error) {
 	if reserved := ReservedOwner(cfg, name); reserved != "" {
 		if reserved != owner {
-			return fmt.Sprintf("name %q is reserved for %s", name, reserved), nil
+			return fmt.Sprintf("name %q is reserved for %s", name, reserved), nil, nil
 		}
 		cur, err := q.Owner(ctx, namespace, name)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return "", err
+			return "", nil, err
 		}
 		if cur == nil || cur.Owner != owner {
-			return "", q.SetOwner(ctx, namespace, name, owner, store.OwnerConfig)
+			return "", &ownerClaim{name, store.OwnerConfig}, nil
 		}
-		return "", nil
+		return "", nil, nil
 	}
 	cur, err := q.Owner(ctx, namespace, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", q.SetOwner(ctx, namespace, name, owner, store.OwnerFirst)
+		return "", &ownerClaim{name, store.OwnerFirst}, nil
 	}
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if cur.Owner != owner {
-		return fmt.Sprintf("name %q is owned by %s", name, cur.Owner), nil
+		return fmt.Sprintf("name %q is owned by %s", name, cur.Owner), nil, nil
 	}
-	return "", nil
+	return "", nil, nil
 }
 
 // ReservedOwner returns the source owner whose owns: globs match name, or

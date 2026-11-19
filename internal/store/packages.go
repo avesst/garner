@@ -73,11 +73,24 @@ func (q *Queries) FindPackage(ctx context.Context, id Identity, blob string) (*f
 	return p, wrapNotFound(err, "package")
 }
 
+// Variant is a placed package with the reason it may be held.
+type Variant struct {
+	*format.Package
+	// OwnerConflict marks a placement held because its deliverer did not
+	// own the name (section 8).
+	OwnerConflict bool
+}
+
+// DecidesVersion reports whether the variant takes part in the content
+// check of design section 7: a hold of someone who does not own the name
+// does not, until it is approved (section 8).
+func (v Variant) DecidesVersion() bool { return !v.OwnerConflict || v.State != Held }
+
 // PlacedVariants returns the packages with this identity that are placed,
 // and not removed, in a distribution. The content check of design section
 // 7 compares their blobs with a new delivery.
-func (q *Queries) PlacedVariants(ctx context.Context, id Identity, dist string) ([]*format.Package, error) {
-	rows, err := q.q.QueryContext(ctx, `SELECT `+packageColumns+`, pl.distribution, pl.state
+func (q *Queries) PlacedVariants(ctx context.Context, id Identity, dist string) ([]Variant, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT `+packageColumns+`, pl.distribution, pl.state, pl.owner_conflict
 		FROM packages p JOIN placements pl ON pl.package_id = p.id
 		WHERE p.repository_id = ? AND p.format = ? AND p.name = ? AND p.epoch = ?
 		AND p.version = ? AND p.release = ? AND p.arch = ? AND pl.distribution = ?
@@ -86,7 +99,20 @@ func (q *Queries) PlacedVariants(ctx context.Context, id Identity, dist string) 
 	if err != nil {
 		return nil, err
 	}
-	return collectPlaced(rows)
+	defer rows.Close()
+	var out []Variant
+	for rows.Next() {
+		var v Variant
+		var dist, state string
+		p, err := scanPackage(rows, &dist, &state, &v.OwnerConflict)
+		if err != nil {
+			return nil, err
+		}
+		p.Distribution, p.State = dist, state
+		v.Package = p
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // ServedPrefixCollision reports whether another package of the format with
@@ -143,12 +169,14 @@ func (q *Queries) SetSignedBlob(ctx context.Context, id, sha string) error {
 }
 
 // Place puts a package into a distribution with the given state, or
-// changes the state of an existing placement.
-func (q *Queries) Place(ctx context.Context, packageID, dist, state string) error {
-	_, err := q.q.ExecContext(ctx, `INSERT INTO placements (package_id, distribution, state, created_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT (package_id, distribution) DO UPDATE SET state = excluded.state`,
-		packageID, dist, state, Now())
+// changes the state of an existing placement. ownerConflict marks a hold
+// whose deliverer did not own the name (Variant).
+func (q *Queries) Place(ctx context.Context, packageID, dist, state string, ownerConflict bool) error {
+	_, err := q.q.ExecContext(ctx, `INSERT INTO placements (package_id, distribution, state, owner_conflict, created_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (package_id, distribution) DO UPDATE
+		SET state = excluded.state, owner_conflict = excluded.owner_conflict`,
+		packageID, dist, state, ownerConflict, Now())
 	return err
 }
 

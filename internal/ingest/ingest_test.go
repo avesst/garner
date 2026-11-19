@@ -218,6 +218,88 @@ func TestOwnershipOfReplacedNamesAllowedAndClaimed(t *testing.T) {
 	}
 }
 
+// A delivery held for an ownership conflict claims none of its names:
+// otherwise a refused package would lock out the owners-to-be of every
+// free name it lists.
+func TestOwnershipHoldClaimsNoNames(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.upload(t, debtest.Build("owned", "1.0", "amd64", "b"), "", "team-b"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.in.Ingest(ctx, bytes.NewReader(debtest.BuildWith("squat", "1.0", "amd64", "s", "Replaces: free1, owned\n")), Request{
+		Owner: SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.State != store.Held {
+		t.Fatalf("state = %s, want held", res.State)
+	}
+	for _, name := range []string{"squat", "free1"} {
+		if o, err := f.in.Store.Owner(ctx, "os", name); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("held delivery claimed %q: %+v, %v", name, o, err)
+		}
+	}
+	if _, err := f.upload(t, debtest.Build("free1", "1.0", "amd64", "c"), "", "team-c"); err != nil {
+		t.Errorf("upload of a name the held package listed: %v", err)
+	}
+}
+
+// A package held because its deliverer does not own the name does not
+// stop the owner from delivering that version; a package held for
+// approval still does.
+func TestOwnershipHoldDoesNotBlockOwner(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if _, err := f.upload(t, debtest.Build("victim", "1.0", "amd64", "b"), "", "team-b"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("victim", "2.0", "amd64", "squat")), Request{
+		Owner: SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil || res.State != store.Held {
+		t.Fatalf("foreign sync = %+v, %v; want held", res, err)
+	}
+	res, err = f.upload(t, debtest.Build("victim", "2.0", "amd64", "real"), "", "team-b")
+	if err != nil {
+		t.Fatalf("owner's upload after a foreign hold: %v", err)
+	}
+	if res.State != store.Active {
+		t.Errorf("owner's upload state = %s, want active", res.State)
+	}
+
+	// The owner's own hold for approval still decides the version.
+	res, err = f.in.Ingest(ctx, bytes.NewReader(debtest.Build("victim", "3.0", "amd64", "first")), Request{
+		Owner: "team-b", Origin: "upload", OriginRef: "x", VerifyStatus: "n/a", Held: true,
+	})
+	if err != nil || res.State != store.Held {
+		t.Fatalf("held for approval = %+v, %v; want held", res, err)
+	}
+	_, err = f.upload(t, debtest.Build("victim", "3.0", "amd64", "second"), "", "team-b")
+	wantKind(t, err, Conflict)
+
+	// Once approved, a foreign package decides its version like any other.
+	foreign, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("victim", "4.0", "amd64", "squat")), Request{
+		Owner: SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+		HoldOnOwnerConflict: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.in.Store.Tx(ctx, func(q *store.Queries) error { // as the approve API does
+		_, err := q.SetState(ctx, foreign.Package.ID, foreign.Distribution, store.Active)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.upload(t, debtest.Build("victim", "4.0", "amd64", "real"), "", "team-b")
+	wantKind(t, err, Conflict)
+}
+
 func TestRejectsUnconfigured(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.upload(t, debtest.Build("app", "1.0", "arm64", "a"), "", "team")
