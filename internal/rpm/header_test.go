@@ -3,11 +3,14 @@ package rpm
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestReadHeader(t *testing.T) {
@@ -159,5 +162,68 @@ func TestParseObsoletes(t *testing.T) {
 		if !slices.Equal(p.Replaces, want) {
 			t.Errorf("%s: Replaces = %q, want %q", file, p.Replaces, want)
 		}
+	}
+}
+
+// fakeRPMObsoletes is fakeRPM with an Obsoletes array of count entries
+// stored in obs.
+func fakeRPMObsoletes(obs []byte, count uint32) []byte {
+	b := fakeRPM(map[int32]string{tagName: "a", tagVersion: "1", tagRelease: "1",
+		tagArch: "noarch", tagSourceRPM: "a-1-1.src.rpm"})
+	// Rebuild the main header with one more entry pointing past its data.
+	main := b[96+16:]
+	nindex := binary.BigEndian.Uint32(main[8:12])
+	hsize := binary.BigEndian.Uint32(main[12:16])
+	index, data := main[16:16+nindex*16], main[16+nindex*16:]
+	var out bytes.Buffer
+	out.Write(b[:96+16])
+	out.Write(headerMagic)
+	out.Write(make([]byte, 4))
+	binary.Write(&out, binary.BigEndian, nindex+1)
+	binary.Write(&out, binary.BigEndian, hsize+uint32(len(obs)))
+	out.Write(index)
+	for _, v := range []uint32{tagObsoletes, typeStringArray, hsize, count} {
+		binary.Write(&out, binary.BigEndian, v)
+	}
+	out.Write(data)
+	out.Write(obs)
+	return out.Bytes()
+}
+
+// A header is bounded by maxHeader, but what garner builds from it must
+// be too: an Obsoletes array of empty strings costs a byte each in the
+// file and far more as Go strings.
+func TestReadHeaderObsoletesMemory(t *testing.T) {
+	const n = 32 << 20
+	in := fakeRPMObsoletes(make([]byte, n), n)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err := ReadHeader(bytes.NewReader(in))
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 3*uint64(len(in)) {
+		t.Errorf("reading a %d MiB rpm allocated %d MiB", len(in)>>20, alloc>>20)
+	}
+	if err == nil || !strings.Contains(err.Error(), "obsoletes") {
+		t.Errorf("err = %v, want too many obsoletes", err)
+	}
+}
+
+// Obsoletes names are de-duplicated in time linear in their number.
+func TestReadHeaderManyObsoletes(t *testing.T) {
+	var obs []byte
+	for i := range maxObsoletes {
+		obs = fmt.Appendf(obs, "n%d\x00", i)
+	}
+	start := time.Now()
+	p, err := ReadHeader(bytes.NewReader(fakeRPMObsoletes(obs, maxObsoletes)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Obsoletes) != maxObsoletes {
+		t.Errorf("got %d obsoletes, want %d", len(p.Obsoletes), maxObsoletes)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("reading %d obsoletes took %v", maxObsoletes, d)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -40,6 +39,11 @@ var (
 // make garner allocate without limit. Real headers with large file lists
 // are tens of MiB.
 const maxHeader = 128 << 20
+
+// maxObsoletes bounds the Obsoletes array, which costs a byte per entry in
+// the file and far more once decoded. Real packages list at most a few
+// hundred.
+const maxObsoletes = 1 << 16
 
 // The characters rpmbuild accepts in these fields, without its macro
 // characters %{}: a built package has its macros expanded, and repodata
@@ -101,8 +105,10 @@ func ReadHeader(r io.Reader) (*Package, error) {
 	}
 	// A file path or capability such as perl(Foo) cannot be the name of a
 	// package garner serves, so it needs no owner.
+	seen := map[string]bool{}
 	for _, name := range tags.strs(tagObsoletes) {
-		if nameRE.MatchString(name) && !slices.Contains(p.Obsoletes, name) {
+		if nameRE.MatchString(name) && !seen[name] {
+			seen[name] = true
 			p.Obsoletes = append(p.Obsoletes, name)
 		}
 	}
@@ -187,6 +193,9 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 			// count strings, each NUL-terminated; each takes a byte at least.
 			if uint64(count) > uint64(len(data)) {
 				return 0, nil, fmt.Errorf("tag %d: bad count", tag)
+			}
+			if count > maxObsoletes {
+				return 0, nil, fmt.Errorf("%d obsoletes, limit %d", count, maxObsoletes)
 			}
 			rest, names := data[off:], make([]string, 0, count)
 			for range count {
