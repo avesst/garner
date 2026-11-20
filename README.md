@@ -49,9 +49,12 @@ export GARNER_TOKEN="ci-mytool:<secret>"
 garner upload --suite stable dist/mytool_1.2.0_amd64.deb
 ```
 
+For CI images without a package manager, each release also carries
+`garner` as a static binary, `garner_<version>_linux_amd64`.
+
 The first upload of a package name makes the token's owner (`team-a`) the
-owner of that name. Uploads of the name under any other owner are refused, so one team
-cannot replace another team's package.
+owner of that name. Uploads of the name under any other owner are refused,
+so one team cannot replace another team's package.
 
 ### Synced releases
 
@@ -149,7 +152,7 @@ Fedora 44.
 ### Install the package
 
 Each [GitHub release](https://github.com/avesst/garner/releases) carries a
-`.deb` and an `.rpm` for amd64, with `SHA256SUMS`.
+`.deb`, an `.rpm` and a static binary for Linux on amd64, with `SHA256SUMS`.
 
 Find the latest release (or replace the first two lines with
 `VERSION=0.1.0`):
