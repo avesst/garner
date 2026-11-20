@@ -1,9 +1,9 @@
 name: release
 
 # A semver tag (v1.2.3, v1.3.0-rc.1) builds the .deb and .rpm, installs
-# them in containers, and attaches them with SHA256SUMS to a draft
-# GitHub release, published by hand. Other tags starting with v are
-# ignored.
+# them in containers, and publishes them with SHA256SUMS as a GitHub
+# release; a tag with a pre-release suffix gives a pre-release. Other
+# tags starting with v are ignored.
 on:
   push:
     tags: ["v*"]
@@ -37,7 +37,7 @@ jobs:
     if: needs.semver.outputs.ok == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write # the draft release
+      contents: write # the release
     steps:
       - uses: actions/checkout@v5
         with:

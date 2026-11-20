@@ -1,5 +1,5 @@
 # garner's release build: the static binary, as .deb and .rpm packages for
-# amd64. A semver tag (v1.2.3, v1.3.0-rc.1) gives a draft GitHub release;
+# amd64. A semver tag (v1.2.3, v1.3.0-rc.1) publishes a GitHub release;
 # `just packages` builds a snapshot into dist/ without publishing.
 version: 2
 project_name: garner
@@ -90,13 +90,14 @@ snapshot:
   version_template: "{{ incpatch .Version }}-dev.{{ .CommitTimestamp }}+{{ .ShortCommit }}"
 
 release:
-  draft: true
-  replace_existing_draft: true
-  # v1.3.0-rc.1 and the like are marked as pre-releases.
+  # Published at once: the workflow has checked and installed the packages
+  # before this runs. v1.3.0-rc.1 and the like are marked as pre-releases,
+  # which /releases/latest and garner's own sync skip by default.
+  draft: false
   prerelease: auto
 
 # Release notes: commits since the previous tag in git order, grouped by
-# their Conventional Commits type. Edit the draft before publishing.
+# their Conventional Commits type.
 changelog:
   use: git
   abbrev: 7
