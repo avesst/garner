@@ -1,9 +1,8 @@
 # garner implementation plan
 
-Status: MVP implemented 2026-11-14; 0.1.0 candidate tested on a Debian 13
-host 2026-11-20. The design is in `design.md`; this file only says
-in which order to build it and when each piece is done. Update it as slices
-land.
+Status: MVP implemented 2026-11-14; 0.1.0 released 2026-11-20. The design
+is in `design.md`; this file only says in which order to build it and when
+each piece is done. Update it as slices land.
 
 ## Project basics
 
