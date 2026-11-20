@@ -64,6 +64,28 @@ Caddy:
   a pinned snapshot URL, publish, GC, and sync from a public GitHub
   repository.
 
+## Next: minimum release age for sync (after 0.1.0)
+
+Supply-chain protection: a synced release is published only once it is old
+enough, so a compromised release has time to be noticed and pulled first.
+Decided so far:
+
+- Key `min_release_age`, a duration, in `defaults` and per source; a source
+  value overrides the default, and `0s` (the default) turns it off. Same
+  precedence as `retention`, `verify` and `approval`.
+- Age is measured from the forge's `published_at`. Assets attached to an
+  already processed release are never picked up (section 7), so editing an
+  old release does not bypass it.
+- A release that is too young stays pending and is not marked processed;
+  later polls check it again, and newer releases are evaluated meanwhile.
+- A source's first run takes the latest release that is old enough, not
+  the latest release.
+- Uploads are not affected.
+- An explicit override for urgent fixes, for example
+  `garner sync <source> --ignore-age <tag>`, so skipping the wait is a
+  logged decision.
+- Deferred releases show in `garner status` and as a metric.
+
 ## Decisions to make when their slice arrives
 
 | Decision | Needed by | Current recommendation |
@@ -75,6 +97,7 @@ Caddy:
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. The `.deb` runs under systemd on the test host |
 | Default deployment | 0.1.0 | Proxy serves `public/`; README "Reverse proxy" |
 | Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
+| `Valid-Until` in `InRelease`, so apt detects metadata frozen by an attacker | After 0.1.0 | Candidate. Needs a periodic re-sign and publish even when nothing changed, and an expiry window longer than that period. deb only; rpm has no equivalent |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve
