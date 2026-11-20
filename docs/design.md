@@ -468,8 +468,9 @@ not trusted.
 - Drafts are never used. Pre-releases are skipped unless `prereleases: true`.
 - First run of a source (or a newly discovered repo): only the latest
   published release.
-- Later runs: every release published after the last processed one, ordered
-  by the forge's publish timestamp (`published_at` or equivalent). Tags are
+- Later runs: every release published after the last processed one, or in
+  the same second, ordered by the forge's publish timestamp
+  (`published_at` or equivalent). Tags are
   not compared as versions, because many are not (`nightly`,
   `2024-05-release`). `seen_releases` keeps a release from being processed
   twice, also when its timestamp is edited.
@@ -478,7 +479,9 @@ not trusted.
   afterwards. A newer release ends the wait. Assets added to a release that
   already had candidates are not picked up.
 - If upstream deletes a release, the packages stay; retention handles them.
-- A failed download leaves the release for the next run, except one that
+- A failed download leaves the release pending: every later run retries
+  it, fetching the release listing far enough back to reach it, and newer
+  releases are processed meanwhile. The exception is a failure that
   cannot succeed: HTTP 404 or 410 from the forge's own origin, or an asset
   larger than `server.max_upload_size`. A 404 from a link outside the
   origin was fetched without the token and may only mean the repository is
@@ -487,7 +490,7 @@ not trusted.
   assets cannot be verified.
 - An asset rejected for its content (invalid package, content or ownership
   conflict) does not hold the release back. Any other ingest failure (disk,
-  database, signing) leaves the release for the next run.
+  database, signing) leaves the release pending the same way.
 
 **Asset selection.**
 

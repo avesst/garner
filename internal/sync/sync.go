@@ -407,8 +407,19 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	pending, oldest, err := q.PendingReleases(ctx, r.src.Name, repo)
+	if err != nil {
+		return false, err
+	}
 	key := r.src.Forge + ":" + repo
-	releases, etag, err := r.client.Releases(ctx, repo, last, r.state.ETags[key])
+	// Pending releases are retried, so the listing must reach them. It is
+	// not answered with "not modified": the run that left one pending did
+	// not store the ETag of its listing.
+	since := last
+	if !oldest.IsZero() && oldest.Before(since) {
+		since = oldest
+	}
+	releases, etag, err := r.client.Releases(ctx, repo, since, r.state.ETags[key])
 	if errors.Is(err, forge.ErrNotModified) {
 		return true, nil
 	}
@@ -425,18 +436,26 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 		candidates = append(candidates, rel)
 	}
 	slices.SortStableFunc(candidates, func(a, b forge.Release) int { return a.PublishedAt.Compare(b.PublishedAt) })
-	if !seenAny {
-		// First run, or a newly discovered repository: only the latest.
-		if len(candidates) > 1 {
-			candidates = candidates[len(candidates)-1:]
-		}
-	} else {
-		candidates = slices.DeleteFunc(candidates, func(rel forge.Release) bool {
-			return !rel.PublishedAt.After(last)
-		})
+	var latest string
+	if len(candidates) > 0 {
+		latest = candidates[len(candidates)-1].ID
 	}
+	candidates = slices.DeleteFunc(candidates, func(rel forge.Release) bool {
+		switch {
+		case pending[rel.ID]:
+			return false
+		case !seenAny:
+			// First run, or a newly discovered repository: only the latest.
+			return rel.ID != latest
+		default:
+			// A release published in the same second as the last
+			// processed one is kept; seen_releases skips those already
+			// processed.
+			return rel.PublishedAt.Before(last)
+		}
+	})
 
-	matched := false
+	matched, retry := false, false
 	var errs []error
 	for i, rel := range candidates {
 		seen, err := q.SeenRelease(ctx, r.src.Name, repo, rel.ID)
@@ -452,9 +471,13 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 			errs = append(errs, fmt.Errorf("release %s: %w", rel.Tag, err))
 		}
 		if transient {
-			// Leave it unseen so the next poll retries; keep the old ETag
-			// so the listing is fetched again.
-			return matched, errors.Join(errs...)
+			// Leave it unseen so the next poll retries it, without
+			// holding up the newer releases (section 7).
+			if err := q.MarkPending(ctx, r.src.Name, repo, rel.ID, rel.PublishedAt); err != nil {
+				return matched, err
+			}
+			retry = true
+			continue
 		}
 		if !had && err == nil && i == len(candidates)-1 {
 			// The newest release has no candidate assets yet: many CI
@@ -467,7 +490,7 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 			return matched, err
 		}
 	}
-	if etag != "" {
+	if etag != "" && !retry {
 		r.state.ETags[key] = etag
 	}
 	return matched || len(candidates) == 0, errors.Join(errs...)

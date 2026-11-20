@@ -34,6 +34,7 @@ type fakeForge struct {
 	releases map[string][]forge.Release
 	files    map[string][]byte // asset URL -> body
 	fail     map[string]bool   // asset URL -> download fails
+	etag     string            // when set, a request with it is not modified
 
 	mu        gosync.Mutex
 	calls     map[string]int           // repo -> Releases calls
@@ -52,7 +53,11 @@ func (f *fakeForge) RateLimitRemaining() int { return -1 }
 func (f *fakeForge) ListRepos(context.Context, string, bool) ([]forge.Repo, error) {
 	return f.repos, nil
 }
-func (f *fakeForge) Releases(ctx context.Context, repo string, _ time.Time, _ string) ([]forge.Release, string, error) {
+
+// Releases returns only what the interface promises: the releases
+// published at or after since, so a run that asks for too short a listing
+// misses older ones as it would on a real forge.
+func (f *fakeForge) Releases(ctx context.Context, repo string, since time.Time, etag string) ([]forge.Release, string, error) {
 	f.mu.Lock()
 	if f.calls == nil {
 		f.calls = map[string]int{}
@@ -67,7 +72,16 @@ func (f *fakeForge) Releases(ctx context.Context, repo string, _ time.Time, _ st
 			return nil, "", ctx.Err()
 		}
 	}
-	return f.releases[repo], "", nil
+	if f.etag != "" && etag == f.etag {
+		return nil, "", forge.ErrNotModified
+	}
+	var out []forge.Release
+	for _, r := range f.releases[repo] {
+		if !r.PublishedAt.Before(since) {
+			out = append(out, r)
+		}
+	}
+	return out, f.etag, nil
 }
 func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, error) {
 	f.mu.Lock()
@@ -676,5 +690,87 @@ func TestNoRulesUsesDefaultDistribution(t *testing.T) {
 	}
 	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 1.0 noble") {
 		t.Errorf("placed = %s, want tool 1.0 in noble", got)
+	}
+}
+
+// Releases published in the same second are all processed, also when one
+// of them fails once and another is processed first.
+func TestReleasesWithSameTimestamp(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	r1 := f.release("org/tool", "1", 1)
+	f.forge.add(r1, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+	f.sync()
+	r2 := f.release("org/tool", "2", 2)
+	a2 := f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+	r3 := f.release("org/tool", "3", 2)
+	f.forge.add(r3, "tool_3.0_amd64.deb", debtest.Build("tool", "3.0", "amd64", "3"))
+	f.forge.fail[a2.URL] = true
+	f.sync()
+	delete(f.forge.fail, a2.URL)
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("retry: %s", st.LastError)
+	}
+	got := strings.Join(f.placed(), "; ")
+	for _, want := range []string{"tool 2.0", "tool 3.0"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("placed %q, want %s", got, want)
+		}
+	}
+}
+
+// A release whose download keeps failing does not hold up newer releases,
+// and is still taken once its download works.
+func TestFailingReleaseDoesNotBlockNewer(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	r1 := f.release("org/tool", "1", 1)
+	f.forge.add(r1, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+	f.sync()
+	r2 := f.release("org/tool", "2", 2)
+	a2 := f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+	f.forge.fail[a2.URL] = true
+	r3 := f.release("org/tool", "3", 3)
+	f.forge.add(r3, "tool_3.0_amd64.deb", debtest.Build("tool", "3.0", "amd64", "3"))
+	if st := f.sync(); !strings.Contains(st.LastError, "release v2") {
+		t.Errorf("LastError = %q, want the failing release", st.LastError)
+	}
+	r4 := f.release("org/tool", "4", 4)
+	f.forge.add(r4, "tool_4.0_amd64.deb", debtest.Build("tool", "4.0", "amd64", "4"))
+	if st := f.sync(); !strings.Contains(st.LastError, "release v2") {
+		t.Errorf("LastError = %q, want the failing release still reported", st.LastError)
+	}
+	got := strings.Join(f.placed(), "; ")
+	if !strings.Contains(got, "tool 3.0") || !strings.Contains(got, "tool 4.0") || strings.Contains(got, "tool 2.0") {
+		t.Fatalf("placed %q, want 3.0 and 4.0 but not 2.0", got)
+	}
+
+	delete(f.forge.fail, a2.URL)
+	if st := f.sync(); st.LastError != "" {
+		t.Errorf("LastError = %q after the download works", st.LastError)
+	}
+	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 2.0") {
+		t.Errorf("placed %q, want 2.0 once its download works", got)
+	}
+}
+
+// A pending release is retried even when the listing has not changed
+// since the poll that failed it.
+func TestPendingReleaseRetriedWhenListingUnchanged(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	f.forge.etag = "v1"
+	r1 := f.release("org/tool", "1", 1)
+	f.forge.add(r1, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+	f.sync()
+	r2 := f.release("org/tool", "2", 2)
+	a2 := f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+	r3 := f.release("org/tool", "3", 3)
+	f.forge.add(r3, "tool_3.0_amd64.deb", debtest.Build("tool", "3.0", "amd64", "3"))
+	f.forge.etag = "v2"
+	f.forge.fail[a2.URL] = true
+	f.sync()
+	f.sync() // the listing is unchanged: same ETag
+	delete(f.forge.fail, a2.URL)
+	f.sync()
+	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 2.0") {
+		t.Errorf("placed %q, want 2.0 retried", got)
 	}
 }

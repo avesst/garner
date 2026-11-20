@@ -82,7 +82,7 @@ func (q *Queries) LastProcessed(ctx context.Context, source, repo string) (t tim
 	return t, true, err
 }
 
-// MarkSeen records a processed release.
+// MarkSeen records a processed release; it is no longer pending.
 func (q *Queries) MarkSeen(ctx context.Context, source, repo, tag, releaseID string, publishedAt time.Time) error {
 	pub := ""
 	if !publishedAt.IsZero() {
@@ -91,7 +91,56 @@ func (q *Queries) MarkSeen(ctx context.Context, source, repo, tag, releaseID str
 	_, err := q.q.ExecContext(ctx, `INSERT INTO seen_releases (source, repo, tag, release_id, processed_at, published_at)
 		VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (source, repo, release_id) DO NOTHING`,
 		source, repo, tag, releaseID, Now(), pub)
+	if err != nil {
+		return err
+	}
+	_, err = q.q.ExecContext(ctx, `DELETE FROM pending_releases WHERE source = ? AND repo = ? AND release_id = ?`,
+		source, repo, releaseID)
 	return err
+}
+
+// MarkPending records a release whose attempt failed with an error worth
+// retrying.
+func (q *Queries) MarkPending(ctx context.Context, source, repo, releaseID string, publishedAt time.Time) error {
+	pub := ""
+	if !publishedAt.IsZero() {
+		pub = FormatTime(publishedAt)
+	}
+	_, err := q.q.ExecContext(ctx, `INSERT INTO pending_releases (source, repo, release_id, published_at)
+		VALUES (?, ?, ?, ?) ON CONFLICT (source, repo, release_id) DO NOTHING`,
+		source, repo, releaseID, pub)
+	return err
+}
+
+// PendingReleases returns the IDs of a repository's pending releases and
+// the earliest publish time among them (zero when none has one).
+func (q *Queries) PendingReleases(ctx context.Context, source, repo string) (map[string]bool, time.Time, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT release_id, published_at FROM pending_releases
+		WHERE source = ? AND repo = ?`, source, repo)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	var oldest time.Time
+	for rows.Next() {
+		var id, pub string
+		if err := rows.Scan(&id, &pub); err != nil {
+			return nil, time.Time{}, err
+		}
+		ids[id] = true
+		if pub == "" {
+			continue
+		}
+		t, err := ParseTime(pub)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		if oldest.IsZero() || t.Before(oldest) {
+			oldest = t
+		}
+	}
+	return ids, oldest, rows.Err()
 }
 
 // SaveRepos replaces the cached repository listing of a source.
