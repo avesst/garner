@@ -1,12 +1,13 @@
 # garner implementation plan
 
-Status: MVP implemented, 2026-11-14. The design is in `design.md`; this file only says
+Status: MVP implemented 2026-11-14; 0.1.0 candidate tested on a Debian 13
+host 2026-11-20. The design is in `design.md`; this file only says
 in which order to build it and when each piece is done. Update it as slices
 land.
 
 ## Project basics
 
-- Repository: `github.com/avesst/garner` (Forgejo). May move to GitHub later.
+- Repository: `github.com/avesst/garner` on GitHub.
 - Go module path: `github.com/avesst/garner`. A move means one rewrite of the
   import paths; acceptable while garner is an application, not a library.
 - Go: 1.26 (`go 1.26` in `go.mod`).
@@ -21,7 +22,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 
 | # | Slice | Done when | Status |
 |---|---|---|---|
-| 1 | Skeleton: module, `cmd/garner`, CI running `go vet` and `go test` | CI passes on push | Done; CI not yet run |
+| 1 | Skeleton: module, `cmd/garner`, CI running `go vet` and `go test` | CI passes on push | Done |
 | 2 | Configuration: load, validate, `config validate`, reload on `SIGHUP` (section 5) | Table tests cover valid and invalid files; an invalid reload keeps the old config | Done; `SIGHUP` wiring waits for `serve` (slice 6) |
 | 3 | Database: SQLite, goose migrations, `flock` guard (sections 6, 12) | Migrations apply on SQLite; CI also applies them to PostgreSQL; a second process refuses to start | Done |
 | 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | Done; dpkg's vectors checked once, not committed (GPL), tests compare with `dpkg` instead |
@@ -46,7 +47,22 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 
 - No sync against a real Forgejo, GitLab or GitHub Enterprise Server, and
   none against GitHub with a token or an organization.
-- The systemd unit example is checked with `systemd-analyze verify` only.
+- On a real host, held packages and `approve`, a sync that adds a release,
+  and a GC that deletes anything. Unit and e2e tests cover them.
+
+## Verified on a test host
+
+On 2026-11-20, a build of `3017cf8` was installed from its `.deb` over an
+older build on Debian 13. It ran under the packaged systemd unit, behind
+Caddy:
+
+- The upgrade, restarts and reloads. The listener survives a restart, and
+  `log.format` and `log.level` apply on reload.
+- apt on the host and dnf in a Fedora container installed from the
+  repository, dnf with `gpgcheck` and `repo_gpgcheck` on.
+- Uploads, name ownership, token scopes and revocation, snapshot rollback,
+  a pinned snapshot URL, publish, GC, and sync from a public GitHub
+  repository.
 
 ## Decisions to make when their slice arrives
 
@@ -56,8 +72,9 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
 | rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools; rpm packages stay stored and come back when the tools do |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
-| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. Not yet tested under a running systemd |
-| Default deployment, backup and restore, rpm `Signer` limit | Before release | Document; proxy serves `public/` |
+| Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. The `.deb` runs under systemd on the test host |
+| Default deployment | 0.1.0 | Proxy serves `public/`; README "Reverse proxy" |
+| Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve
