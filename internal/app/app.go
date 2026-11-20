@@ -60,6 +60,7 @@ type App struct {
 	Syncer server.Syncer
 
 	keys     atomic.Pointer[signing.Keyring]
+	logBase  atomic.Pointer[slog.Handler]
 	reloadMu sync.Mutex
 	commit   atomic.Pointer[string]
 	// OnReload is called after a successful reload.
@@ -97,15 +98,58 @@ func KeySources(cfg *config.Config) []signing.KeySource {
 	return out
 }
 
-// NewLogger builds the logger from the log section.
-func NewLogger(cfg *config.Config) *slog.Logger {
+// newLogHandler builds the handler for the log section.
+func newLogHandler(cfg *config.Config) slog.Handler {
 	var level slog.Level
 	level.UnmarshalText([]byte(cfg.Log.Level))
 	opts := &slog.HandlerOptions{Level: level}
 	if cfg.Log.Format == "text" {
-		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+		return slog.NewTextHandler(os.Stdout, opts)
 	}
-	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	return slog.NewJSONHandler(os.Stdout, opts)
+}
+
+// logHandler passes records to the handler of the current log section, so
+// a reload also reaches loggers derived before it.
+type logHandler struct {
+	cur *atomic.Pointer[slog.Handler]
+	// with re-applies the attributes and groups of derived loggers.
+	with func(slog.Handler) slog.Handler
+}
+
+func (h logHandler) current() slog.Handler {
+	base := *h.cur.Load()
+	if h.with != nil {
+		return h.with(base)
+	}
+	return base
+}
+
+func (h logHandler) Enabled(ctx context.Context, l slog.Level) bool {
+	return (*h.cur.Load()).Enabled(ctx, l)
+}
+
+func (h logHandler) Handle(ctx context.Context, r slog.Record) error {
+	return h.current().Handle(ctx, r)
+}
+
+func (h logHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h.derive(func(b slog.Handler) slog.Handler { return b.WithAttrs(attrs) })
+}
+
+func (h logHandler) WithGroup(name string) slog.Handler {
+	return h.derive(func(b slog.Handler) slog.Handler { return b.WithGroup(name) })
+}
+
+func (h logHandler) derive(f func(slog.Handler) slog.Handler) logHandler {
+	prev := h.with
+	h.with = func(b slog.Handler) slog.Handler {
+		if prev != nil {
+			b = prev(b)
+		}
+		return f(b)
+	}
+	return h
 }
 
 // Open loads the configuration, takes the database lock and builds every
@@ -116,8 +160,11 @@ func Open(ctx context.Context, configPath, version string, extra ...format.Forma
 		return nil, fmt.Errorf("%s: %w", configPath, err)
 	}
 	cfg := h.Current()
-	log := NewLogger(cfg)
-	a := &App{Holder: h, Log: log, Version: version, Metrics: metrics.NewRegistry()}
+	a := &App{Holder: h, Version: version, Metrics: metrics.NewRegistry()}
+	base := newLogHandler(cfg)
+	a.logBase.Store(&base)
+	log := slog.New(logHandler{cur: &a.logBase})
+	a.Log = log
 
 	for _, d := range []string{"blobs", "pool", "snapshots", "public", "tmp"} {
 		if err := os.MkdirAll(filepath.Join(cfg.Storage.Path, d), 0o755); err != nil {
@@ -235,6 +282,8 @@ func (a *App) Reload() error {
 		a.Log.Error("reload rejected; keeping the previous configuration", "err", err)
 		return err
 	}
+	base := newLogHandler(cfg)
+	a.logBase.Store(&base)
 	a.refreshCommit()
 	a.Log.Info("configuration reloaded", "hash", cfg.Hash)
 	for _, fn := range a.OnReload {
