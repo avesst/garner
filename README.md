@@ -1,127 +1,306 @@
 # garner
 
-garner is an easy way to run apt and dnf repositories for your organization
-or homelab. The packages you build and the releases you depend on become
-installable with `apt install` and `dnf install`, and update along with the
-rest of the system.
+garner sets up package repositories for your organization or homelab and
+fills them with the releases published on your forges, by your own projects
+and the ones you depend on.
 
-Setting up an internal Linux repository is harder than it should be. Pulp,
-Artifactory and Nexus can do it, but they are built for many formats and large
-deployments, and their setup and operation reflect that. Lighter tools such
-as aptly, reprepro and createrepo_c cover one format each, so serving both deb
-and rpm means running two tools, and syncing releases from forges is left to
-scripts you write around them.
+**Repositories that are easy to set up.** garner is one static binary, using
+SQLite and local disk, configured by one YAML file that fits a GitOps
+workflow. `garner init` creates the database and a signing key. The landing
+page offers the public key and ready-made apt and dnf client files, so adding
+the repository to a machine is a matter of downloading them.
 
-garner sits between the two: one static binary, SQLite and local disk, and
-one YAML file that fits a GitOps workflow. It takes packages from two places:
+**Builds synced from where they are released.** garner watches GitHub, GitHub
+Enterprise Server, GitLab and Forgejo/Gitea for new releases, from single
+repositories or whole organizations and groups, and publishes their `.deb`
+and `.rpm` assets on its own. Packages can also be uploaded directly,
+typically from CI pipelines.
 
-- uploads, typically from CI pipelines;
-- releases synced from GitHub, GitHub Enterprise Server, GitLab and
-  Forgejo/Gitea, from single repositories or whole organizations and groups.
-
-It checks them and serves them signed with one key, so clients trust the
-repository and nothing else. It does not mirror distributions or build
-packages from source.
+garner serves apt and dnf repositories. It does not mirror distributions or
+build packages from source.
 
 > [!WARNING]
 > garner is under active development and is not ready for internet-facing
 > use. Run it on an internal network, with access limited to the hosts and
 > networks that need it.
 
-## How it works
+## Where packages come from
 
-garner verifies upstream checksums, then signs the metadata of both formats
-(`InRelease`, `repomd.xml`). rpm packages are also re-signed one by one,
-because dnf checks each package's own signature; apt trusts a `.deb` through
-the checksums in the signed metadata. Every change is published as an atomic
-snapshot, so clients never see a half-written repository.
+Packages reach the repository in one of two ways. Both end up in the same
+repository, and both follow the same name ownership and retention.
+
+### Uploads
+
+You publish a package yourself, typically as the last step of a CI
+pipeline, with a token that has the `upload` scope. Create one with the
+admin token that `garner init` prints:
+
+```sh
+export GARNER_URL=https://pkg.example.com
+GARNER_TOKEN="admin:<secret>" garner token create --url "$GARNER_URL" \
+    --name ci-mytool --owner team-a --scope upload
+```
+
+Then, in the pipeline:
+
+```sh
+export GARNER_URL=https://pkg.example.com
+export GARNER_TOKEN="ci-mytool:<secret>"
+garner upload --suite stable dist/mytool_1.2.0_amd64.deb
+```
+
+The first upload of a package name makes the token's owner (`team-a`) the
+owner of that name. Uploads of the name under any other owner are refused, so one team
+cannot replace another team's package.
+
+### Synced releases
+
+You list sources in the configuration: a single repository, a GitHub or
+Forgejo organization, or a GitLab group. garner polls each source (hourly by
+default), downloads the `.deb` and `.rpm` assets of new releases, and
+publishes them. Nobody has to upload anything.
+
+```yaml
+# Suites and releases that asset rules can target.
+deb:
+  architectures: [amd64, arm64]
+  suites: [stable, testing]
+
+rpm:
+  architectures: [x86_64]
+  releases: [stable, testing]
+
+forges:
+  - name: github
+    type: github                # github.com; set url for Enterprise Server
+    token_env: GITHUB_TOKEN     # recommended; see the rate limits below
+  - name: gitlab
+    type: gitlab
+    url: https://gitlab.example.com
+    token_file: /etc/garner/gitlab-token
+
+sources:
+  # One repository. Only this source may deliver the names in owns.
+  # Assets with -beta in their file name go to testing, the rest to
+  # stable.
+  - name: mytool
+    forge: github
+    repo: example-org/mytool
+    owns: ["mytool", "mytool-*"]
+    prereleases: true           # also sync releases marked pre-release
+    verify: required            # reject assets without a checksum
+    checksums: ["SHA256SUMS"]
+    assets:
+      - match: "*-beta*"
+        suite: testing
+        release: testing
+      - match: "*"
+        suite: stable
+        release: stable
+
+  # Every project in a GitLab group and its subgroups, polled every
+  # 15 minutes. New packages wait for garner approve.
+  - name: platform
+    forge: gitlab
+    group: platform
+    include: ["svc-*", "lib-*"]   # project names to sync
+    exclude: ["svc-sandbox-*"]    # skipped even if include matches
+    poll_interval: 15m
+    approval: manual
+    retention: 5                # versions kept per package
+```
+
+Each asset is checked against the forge's digest or the release's checksum
+file when one exists, and rejected on a mismatch. Asset rules decide which
+suite or release an asset goes to. A source can reserve package names
+(`owns`) so that only it may deliver them, and with `approval: manual` new
+packages wait for `garner approve`. `garner sync <source>` polls a source
+right away.
+
+Every poll is a few API requests, and forges limit how many they accept.
+Give each forge a token: it is required for private repositories, and on
+GitHub it lifts the limit from 60 requests an hour per IP address to 5,000
+an hour for the token's user. 60 covers a few repositories, not an
+organization. A token with read-only access to the repositories is enough,
+and garner's requests for releases that have not changed do not count
+against GitHub's limit when they carry a token. The metric
+`garner_forge_ratelimit_remaining` shows how much quota is left.
+
+## Signing and publishing
+
+garner signs everything with one key, so clients trust the repository and
+nothing else. It signs the metadata of both formats (`InRelease`,
+`repomd.xml`) and re-signs rpm packages one by one, because dnf checks each
+package's own signature; apt trusts a `.deb` through the checksums in the
+signed metadata. Every change is published as an atomic snapshot, so clients
+never see a half-written repository. `garner snapshot rollback <id>`
+republishes an earlier snapshot's packages, and clients can pin to a snapshot
+under `/snapshots/<id>/`.
 
 ## Install
 
-Releases on GitHub carry `.deb` and `.rpm` packages for amd64. To build them
-or the binary yourself:
+Install the package, configure and start the service, and put it behind a
+reverse proxy. Optionally, let garner keep itself up to date.
+
+garner runs on Linux amd64 with systemd. The packages, and apt and dnf as
+clients, are tested on Debian 13, Ubuntu 26.04 LTS, AlmaLinux 10 and
+Fedora 44.
+
+### Install the package
+
+Each [GitHub release](https://github.com/avesst/garner/releases) carries a
+`.deb` and an `.rpm` for amd64, with `SHA256SUMS`.
+
+Find the latest release (or replace the first two lines with
+`VERSION=0.1.0`):
 
 ```sh
-just build          # bin/garner
-just packages       # dist/garner_<version>_amd64.deb and dist/garner-<version>-1.x86_64.rpm
+url=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/avesst/garner/releases/latest)
+VERSION=${url##*/v}
+base=https://github.com/avesst/garner/releases/download/v$VERSION
 ```
 
-`just packages` needs [GoReleaser](https://goreleaser.com) on `PATH`. The
-packages install the binary, a systemd unit, a system user and an example
-configuration at `/etc/garner/garner.yaml`. A container image is built from
-the `Dockerfile`.
+Debian and Ubuntu:
+
+```sh
+curl -fL -O "$base/garner_${VERSION}_amd64.deb" -O "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+sudo apt install "./garner_${VERSION}_amd64.deb"
+```
+
+Fedora, RHEL and derivatives:
+
+```sh
+curl -fL -O "$base/garner-${VERSION}-1.x86_64.rpm" -O "$base/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+sudo dnf install "./garner-${VERSION}-1.x86_64.rpm"
+```
+
+The packages install the binary, a systemd unit, a system user and an example
+configuration at `/etc/garner/garner.yaml`.
 
 rpm support needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`.
-Without them garner serves deb only and logs which tools are missing.
+The packages recommend them, so apt and dnf install them by default. If you
+install without recommended packages (`--no-install-recommends`, or dnf with
+`install_weak_deps=False`), install the tools yourself or remove the `rpm`
+section from the configuration; otherwise garner refuses to start.
 
-## First start
+### Configure and start
 
-Set `server.public_url` in `/etc/garner/garner.yaml` to the URL clients use,
-then:
+The package does not enable the service, because garner needs a
+configuration and a signing key first. In `/etc/garner/garner.yaml`, set
+`server.public_url` to the URL clients use. The `deb` and `rpm` sections
+each enable a format; remove the one you don't need. With `rpm` present and
+its tools missing, garner refuses to start. Then:
 
 ```sh
 garner config validate /etc/garner/garner.yaml
 sudo -u garner garner init
-systemctl enable --now garner
+sudo systemctl enable --now garner
 ```
 
 `init` creates storage, the database, a signing key (when none is configured)
 and an admin token. The token is printed once.
 
-## Reverse proxy
+Client setup instructions for apt and dnf are on the landing page at
+`public_url`.
+
+### Put it behind a reverse proxy
 
 garner speaks plain HTTP. Put it behind a reverse proxy such as nginx or Caddy
-that terminates TLS, and set `public_url` to the proxy's URL.
+that terminates TLS, and set `public_url` to the proxy's URL. With the proxy
+on the same host, set `server.listen` to `127.0.0.1:8080` so that garner is
+reachable only through it.
+
+HTTPS is recommended because clients fetch the signing key from the
+repository itself, and TLS is what protects that first download. Plain HTTP
+is fine for reads when clients get the key another way, for example from
+configuration management. Uploads from other hosts always need HTTPS.
 
 Uploads and other authenticated requests are accepted only from loopback, or
 from a proxy listed in `server.trusted_proxies` that sends
 `X-Forwarded-Proto: https`. Other requests get `403`. A proxy on the same
-host connects over loopback and needs no entry, but it must set
-`X-Forwarded-Proto` (in nginx, `proxy_set_header X-Forwarded-Proto $scheme;`;
-Caddy sets it by default). Without the header, garner takes its requests for
-a local client and accepts them even when they arrived over plain HTTP.
+host connects over loopback and needs no entry.
+
+A same-host proxy must set `X-Forwarded-Proto` (in nginx,
+`proxy_set_header X-Forwarded-Proto $scheme;`; Caddy sets it by default).
+Without it, garner can't tell proxied requests from local ones and accepts
+tokens that arrived over plain HTTP.
 
 The proxy can also serve `/var/lib/garner/public` straight from disk (it must
 follow symlinks). apt and dnf then keep working while garner restarts or is
-stopped; only uploads and sync pause.
+stopped; only uploads and sync pause. The examples below do that, and pass
+only the API to garner. `/healthz`, `/readyz` and `/metrics` are therefore
+not reachable through the proxy; monitor them on garner's own address, or
+serve `/metrics` on a separate one with `metrics.listen`.
 
-## Use
-
-Upload from CI:
+The proxy's user needs read access to the state directory, and the proxy
+must be restarted to pick up the new group:
 
 ```sh
-export GARNER_URL=https://pkg.example.com
-export GARNER_TOKEN=ci:...
-garner upload --suite stable dist/*.deb
+sudo usermod -aG garner caddy      # or www-data for nginx on Debian
+sudo systemctl restart caddy
 ```
 
-Point clients at the server: the landing page at `public_url` offers the
-signing key and an apt or dnf client file per suite.
+Caddy:
 
-Reload the configuration with `garner reload` or `SIGHUP`. `garner help`
-lists every command.
+```caddyfile
+pkg.example.com {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		root * /var/lib/garner/public
+		file_server
+	}
+}
+```
+
+nginx:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name pkg.example.com;
+    ssl_certificate     /etc/ssl/certs/pkg.example.com.pem;
+    ssl_certificate_key /etc/ssl/private/pkg.example.com.key;
+
+    root /var/lib/garner/public;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 2g;          # storage.max_package_size
+        proxy_request_buffering off;
+    }
+}
+```
+
+### Keep garner up to date
+
+garner can sync its own releases, which also makes a good first source. Add
+this to `/etc/garner/garner.yaml`:
+
+```yaml
+forges:
+  - name: github              # skip if you already have a github forge
+    type: github
+
+sources:
+  - name: garner
+    forge: github
+    repo: avesst/garner
+    owns: ["garner"]
+```
+
+Then reload with `sudo systemctl reload garner`, and add the repository on
+the garner host itself as the landing page describes. From then on, new
+garner releases arrive with the host's regular package updates.
+
+If a release breaks garner, the host can't fetch the fix from its own
+repository. Install the fixed package from GitHub as described above.
 
 ## Documentation
 
-- [docs/configuration.md](docs/configuration.md): every configuration key.
-- [docs/design.md](docs/design.md): architecture and the decisions behind it.
-- `garner(1)` and `garner.yaml(5)`: man pages, in `docs/` and in the package.
-
-## Development
-
-```sh
-just check          # gofmt, go vet and unit tests, as CI runs them
-just e2e            # real apt and dnf clients in containers; needs Docker
-just test-packages  # install dist/ packages in containers; needs Docker
-```
-
-Versions are [semver](https://semver.org). A release is a tag such as `v1.2.3`
-or `v1.3.0-rc.1`: CI builds and tests the packages and attaches them, with
-`SHA256SUMS`, to a draft GitHub release, which is published by hand. Builds
-between tags get the next patch version as a pre-release, for example
-`1.2.4-dev.<commit time>+<hash>` from `just packages` (`1.2.4~dev...` in package
-versions, so it sorts before 1.2.4), and Go's pseudo-version from `just build`.
-
-## License
-
-0BSD; see [LICENSE](LICENSE).
+See the man pages `garner(1)` and `garner.yaml(5)`, installed with the
+package, and the [`docs/`](docs/) directory.

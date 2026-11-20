@@ -95,7 +95,7 @@ Decided so far:
 | rpm when its tools are missing | Slice 8 | Changed before 0.1.0: a format is enabled by its config section. A configured rpm without its tools refuses to start and names them; removing the section keeps rpm packages stored, and they come back with it |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. The `.deb` runs under systemd on the test host |
-| Default deployment | 0.1.0 | Proxy serves `public/`; README "Reverse proxy" |
+| Default deployment | 0.1.0 | Proxy serves `public/`; README "Put it behind a reverse proxy" |
 | Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
 | `Valid-Until` in `InRelease`, so apt detects metadata frozen by an attacker | After 0.1.0 | Candidate. Needs a periodic re-sign and publish even when nothing changed, and an expiry window longer than that period. deb only; rpm has no equivalent |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
