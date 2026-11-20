@@ -77,9 +77,6 @@ func (c *Config) validateServer(p *problems) {
 			p.add(fmt.Sprintf("server.trusted_proxies[%d]", i), "must be an IP address or CIDR prefix, got %q", tp)
 		}
 	}
-	if s.MaxUploadSize <= 0 {
-		p.add("server.max_upload_size", "must be greater than zero")
-	}
 }
 
 // TrustedProxyPrefixes returns server.trusted_proxies as prefixes. A bare
@@ -144,6 +141,9 @@ func (c *Config) validateStorage(p *problems) {
 	}
 	if c.Storage.SnapshotRetention < 2 {
 		p.add("storage.snapshot_retention", "must be at least 2, so the previous snapshot survives a publish")
+	}
+	if c.Storage.MaxPackageSize <= 0 {
+		p.add("storage.max_package_size", "must be greater than zero")
 	}
 }
 

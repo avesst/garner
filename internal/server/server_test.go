@@ -60,7 +60,7 @@ func newFixture(t *testing.T) *fixture {
 	reg, _ := format.NewRegistry(deb.Format{})
 	f := &fixture{cfg: config.Default(), secrets: map[string]string{}}
 	f.cfg.Server.PublicURL = "http://repo.test"
-	f.cfg.Server.MaxUploadSize = 64 << 10
+	f.cfg.Storage.MaxPackageSize = 64 << 10
 	f.cfg.Server.TrustedProxies = []string{"10.0.0.1"}
 	conf := func() *config.Config { return f.cfg }
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

@@ -37,7 +37,6 @@ its default.
 | `client_name` | name | `garner` | Prefix of the files clients install: `<name>.sources`, `<name>.repo`, `/usr/share/keyrings/<name>.gpg`, and the dnf repo ID. Lowercase letters, digits, `.`, `_` and `-`; must start with a letter or digit. |
 | `trusted_proxies` | list of IPs or CIDR prefixes | `[]` | Reverse proxies whose `X-Forwarded-*` headers are honoured. Authenticated requests are accepted only from loopback, or from one of these with `X-Forwarded-Proto: https`. Others get `403`. |
 | `allow_insecure_auth` | bool | `false` | Accept authenticated requests over plain HTTP from any address. Tokens then travel unencrypted, so use this only on an isolated lab network. |
-| `max_upload_size` | size | `2GiB` | Largest package accepted by the upload API. Must be greater than zero. |
 
 ## `metrics`
 
@@ -66,6 +65,7 @@ its default.
 | `gc_grace` | duration | `10m` | How long a replaced snapshot is kept before deletion, so requests already resolved through it can finish. Must not be negative. |
 | `index_history` | duration | `1h` | Index files of every snapshot published within this window are carried into each new snapshot, so a client that fetched the signed top-level file just before a publish can still fetch the indexes it lists. The previous snapshot's index files are always carried over. Must not be negative. |
 | `snapshot_retention` | integer | `30` | How many snapshots are kept, newest first. The current snapshot is always kept. Must be at least 2. |
+| `max_package_size` | size | `2GiB` | Largest package garner accepts, from an upload or as a synced release asset. A larger upload gets `413`; a larger asset is skipped and recorded as a conflict. Must be greater than zero. |
 
 ## `signing`
 

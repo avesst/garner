@@ -36,8 +36,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Server.Listen != ":8080" || cfg.Server.ClientName != "garner" {
 		t.Errorf("server defaults = %+v", cfg.Server)
 	}
-	if cfg.Server.MaxUploadSize != 2<<30 {
-		t.Errorf("max_upload_size = %d, want 2 GiB", cfg.Server.MaxUploadSize)
+	if cfg.Storage.MaxPackageSize != 2<<30 {
+		t.Errorf("max_package_size = %d, want 2 GiB", cfg.Storage.MaxPackageSize)
 	}
 	if cfg.Storage.GCGrace != 10*time.Minute || cfg.Storage.IndexHistory != time.Hour {
 		t.Errorf("storage defaults = %+v", cfg.Storage)
@@ -70,7 +70,9 @@ func TestInvalid(t *testing.T) {
 		{"unknown key", minimal + "sever:\n  listen: x\n", []string{"field sever not found"}},
 		{"two documents", minimal + "---\n" + minimal, []string{"more than one YAML document"}},
 		{"bad duration", minimal + "storage:\n  gc_grace: soon\n", []string{"soon"}},
-		{"bad size", minimal + "  max_upload_size: lots\n", []string{`invalid size "lots"`}},
+		{"bad size", minimal + "storage:\n  max_package_size: lots\n", []string{`invalid size "lots"`}},
+		{"zero size", minimal + "storage:\n  max_package_size: 0\n", []string{"storage.max_package_size: must be greater than zero"}},
+		{"old size key", minimal + "  max_upload_size: 2GiB\n", []string{"field max_upload_size not found"}},
 		{"postgres", minimal + "database:\n  url: postgres://db/garner\n", []string{"PostgreSQL is not supported yet"}},
 		{"relative sqlite", minimal + "database:\n  url: sqlite://garner.db\n", []string{"three slashes"}},
 		{"bad proxy", minimal + "  trusted_proxies: [\"10.0.0.0/33\"]\n", []string{"server.trusted_proxies[0]"}},

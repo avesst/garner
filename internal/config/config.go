@@ -42,7 +42,6 @@ type Server struct {
 	ClientName        string   `yaml:"client_name"`
 	TrustedProxies    []string `yaml:"trusted_proxies"`
 	AllowInsecureAuth bool     `yaml:"allow_insecure_auth"`
-	MaxUploadSize     ByteSize `yaml:"max_upload_size"`
 }
 
 type Metrics struct {
@@ -65,6 +64,8 @@ type Storage struct {
 	IndexHistory time.Duration `yaml:"index_history"`
 	// SnapshotRetention is how many snapshots are kept, newest first.
 	SnapshotRetention int `yaml:"snapshot_retention"`
+	// MaxPackageSize limits an uploaded package and a synced asset alike.
+	MaxPackageSize ByteSize `yaml:"max_package_size"`
 }
 
 type Signing struct {
@@ -191,9 +192,8 @@ func (c *Config) Settings(s Source) Settings {
 func Default() *Config {
 	return &Config{
 		Server: Server{
-			Listen:        ":8080",
-			ClientName:    "garner",
-			MaxUploadSize: 2 << 30,
+			Listen:     ":8080",
+			ClientName: "garner",
 		},
 		Log:      Log{Format: "json", Level: "info"},
 		Database: Database{URL: "sqlite:///var/lib/garner/garner.db"},
@@ -202,6 +202,7 @@ func Default() *Config {
 			GCGrace:           10 * time.Minute,
 			IndexHistory:      time.Hour,
 			SnapshotRetention: 30,
+			MaxPackageSize:    2 << 30,
 		},
 		Deb: Deb{Architectures: []string{"amd64"}, Suites: []string{"stable"}},
 		RPM: RPM{Architectures: []string{"x86_64"}, Releases: []string{"stable"}},

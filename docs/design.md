@@ -271,7 +271,6 @@ server:
   client_name: garner
   trusted_proxies: ["10.0.0.0/8"]
   allow_insecure_auth: false
-  max_upload_size: 2GiB
 
 metrics:
   listen: ""                  # empty: serve /metrics on server.listen
@@ -288,6 +287,7 @@ storage:
   gc_grace: 10m
   index_history: 1h           # carry over index files from this window
   snapshot_retention: 30      # snapshots kept, newest first
+  max_package_size: 2GiB      # largest upload or synced asset
 
 signing:
   keys:                       # first key signs; all are published
@@ -416,7 +416,7 @@ Body: the package file
   when the name is owned by someone else. `403` on a missing scope.
 - `400` when the suite or release is not configured; the response lists the
   configured ones.
-- `413` when the file exceeds `server.max_upload_size` (default 2 GiB).
+- `413` when the file exceeds `storage.max_package_size` (default 2 GiB).
 - Uploads are published immediately (`approval` does not apply).
 - `garner upload [--suite S] [--release R] FILES...` wraps the API.
 
@@ -483,7 +483,7 @@ not trusted.
   it, fetching the release listing far enough back to reach it, and newer
   releases are processed meanwhile. The exception is a failure that
   cannot succeed: HTTP 404 or 410 from the forge's own origin, or an asset
-  larger than `server.max_upload_size`. A 404 from a link outside the
+  larger than `storage.max_package_size`. A 404 from a link outside the
   origin was fetched without the token and may only mean the repository is
   private, so it is retried. For a skipped asset a `download` conflict is
   recorded; for a checksum file, the whole release is skipped, since its

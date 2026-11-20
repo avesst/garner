@@ -4,7 +4,6 @@ server:
   client_name: garner
   trusted_proxies: ["10.0.0.0/8"]
   allow_insecure_auth: false
-  max_upload_size: 2GiB
 
 metrics:
   listen: ""                  # empty: serve /metrics on server.listen
@@ -20,6 +19,7 @@ storage:
   path: /var/lib/garner
   gc_grace: 10m
   index_history: 1h           # carry over index files from this window
+  max_package_size: 2GiB      # largest upload or synced asset
 
 signing:
   keys:                       # first key signs; all are published

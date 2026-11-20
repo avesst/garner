@@ -75,7 +75,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	progress := &deadlineReader{r: r.Body, extend: func() {
 		rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout)) // unsupported in tests' recorders
 	}}
-	body := http.MaxBytesReader(w, progress, int64(cfg.Server.MaxUploadSize))
+	body := http.MaxBytesReader(w, progress, int64(cfg.Storage.MaxPackageSize))
 	counter := &countingReader{r: body}
 	res, err := s.Ingester.Ingest(r.Context(), counter, ingest.Request{
 		Targets: targets, Owner: t.Owner, Origin: "upload",
@@ -87,7 +87,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &tooBig):
 		s.uploads.Inc("too_large")
 		writeError(w, http.StatusRequestEntityTooLarge,
-			fmt.Sprintf("upload exceeds server.max_upload_size (%d bytes)", tooBig.Limit))
+			fmt.Sprintf("upload exceeds storage.max_package_size (%d bytes)", tooBig.Limit))
 	case errors.As(err, &ie) && ie.Kind == ingest.Conflict:
 		s.uploads.Inc("conflict")
 		writeError(w, http.StatusConflict, ie.Msg)

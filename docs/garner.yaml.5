@@ -138,10 +138,6 @@ Others get 403.
 Accept authenticated requests over plain HTTP from any address.
 Tokens then travel unencrypted, so use this only on an isolated lab
 network.
-.TP
-.BR max_upload_size " (\fIsize\fR, default " 2GiB )
-Largest package accepted by the upload API.
-Must be greater than zero.
 .SH METRICS
 .TP
 .BR listen " (\fIlisten address\fR, default empty)"
@@ -193,6 +189,13 @@ Must not be negative.
 How many snapshots are kept, newest first.
 The current snapshot is always kept.
 Must be at least 2.
+.TP
+.BR max_package_size " (\fIsize\fR, default " 2GiB )
+Largest package garner accepts, from an upload or as a synced release
+asset.
+A larger upload gets 413; a larger asset is skipped and recorded as a
+conflict.
+Must be greater than zero.
 .SH SIGNING
 .TP
 .BR keys " (\fIlist of keys\fR, default " [] )

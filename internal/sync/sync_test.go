@@ -591,9 +591,9 @@ func TestPermanentDownloadFailureIsSkipped(t *testing.T) {
 	}{
 		{"too large", func(f *fixture, rel *forge.Release) {
 			big := debtest.Build("tool", "1.0", "amd64", strings.Repeat("x", 4096))
-			f.cfg.Server.MaxUploadSize = config.ByteSize(len(big) - 1)
+			f.cfg.Storage.MaxPackageSize = config.ByteSize(len(big) - 1)
 			f.forge.add(rel, "tool_1.0_amd64.deb", big)
-		}, "larger than server.max_upload_size"},
+		}, "larger than storage.max_package_size"},
 		{"gone", func(f *fixture, rel *forge.Release) {
 			a := f.forge.add(rel, "tool_1.0_amd64.deb", nil)
 			delete(f.forge.files, a.URL)

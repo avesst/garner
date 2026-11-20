@@ -630,8 +630,8 @@ func (r *run) isCandidate(name string) bool {
 	return false
 }
 
-// errTooLarge is an asset over server.max_upload_size.
-var errTooLarge = errors.New("larger than server.max_upload_size")
+// errTooLarge is an asset over storage.max_package_size.
+var errTooLarge = errors.New("larger than storage.max_package_size")
 
 // permanent reports whether a download failure recurs on every retry: the
 // asset is too large, or the server says it is gone.
@@ -657,7 +657,7 @@ func (r *run) download(ctx context.Context, a forge.Asset, dir string) (*downloa
 		return nil, err
 	}
 	defer f.Close()
-	limit := int64(r.cfg.Server.MaxUploadSize)
+	limit := int64(r.cfg.Storage.MaxPackageSize)
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, limit+1))
 	if err != nil {
