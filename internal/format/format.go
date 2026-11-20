@@ -195,6 +195,16 @@ func NewRegistry(fs ...Format) (*Registry, error) {
 // All returns the formats in registration order.
 func (r *Registry) All() []Format { return r.formats }
 
+// Names returns the registered formats' names, sorted.
+func (r *Registry) Names() []string {
+	out := make([]string, 0, len(r.formats))
+	for _, f := range r.formats {
+		out = append(out, f.Name())
+	}
+	slices.Sort(out)
+	return out
+}
+
 // Get returns the format with the given name.
 func (r *Registry) Get(name string) (Format, bool) {
 	for _, f := range r.formats {

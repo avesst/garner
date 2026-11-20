@@ -4,12 +4,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-const minimal = "server:\n  public_url: https://repo.example.com\n"
+// serverOnly has no format section. minimal adds deb; it ends inside the
+// server section, so cases can append indented server keys.
+const (
+	serverOnly = "server:\n  public_url: https://repo.example.com\n"
+	minimal    = "deb: {}\n" + serverOnly
+)
 
 func TestDesignExampleIsValid(t *testing.T) {
 	cfg, err := Load("testdata/design-example.yaml")
@@ -50,6 +56,41 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+// A format is enabled by its section being present. A bare section gets
+// the defaults, and a partial one keeps the defaults of keys it leaves out.
+func TestFormatSections(t *testing.T) {
+	tests := []struct {
+		name, yaml string
+		formats    []string
+		check      func(*Config) bool
+	}{
+		{"bare deb", serverOnly + "deb:\n", []string{"deb"}, func(c *Config) bool {
+			return slices.Equal(c.Deb.Suites, []string{"stable"}) && slices.Equal(c.Deb.Architectures, []string{"amd64"})
+		}},
+		{"partial rpm", serverOnly + "rpm:\n  releases: [el10]\n", []string{"rpm"}, func(c *Config) bool {
+			return slices.Equal(c.RPM.Releases, []string{"el10"}) && slices.Equal(c.RPM.Architectures, []string{"x86_64"})
+		}},
+		{"both", serverOnly + "deb: {}\nrpm: {}\n", []string{"deb", "rpm"}, func(c *Config) bool { return true }},
+		{"through a merge key", serverOnly + "<<: {deb: {suites: [main]}}\n", []string{"deb"}, func(c *Config) bool {
+			return slices.Equal(c.Deb.Suites, []string{"main"})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Parse([]byte(tc.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Formats(); !slices.Equal(got, tc.formats) {
+				t.Errorf("formats = %v, want %v", got, tc.formats)
+			}
+			if !tc.check(cfg) {
+				t.Errorf("deb = %+v, rpm = %+v", cfg.Deb, cfg.RPM)
+			}
+		})
+	}
+}
+
 func TestPartialSectionKeepsOtherDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(minimal + "storage:\n  gc_grace: 5m\n"))
 	if err != nil {
@@ -76,8 +117,8 @@ func TestInvalid(t *testing.T) {
 		{"postgres", minimal + "database:\n  url: postgres://db/garner\n", []string{"PostgreSQL is not supported yet"}},
 		{"relative sqlite", minimal + "database:\n  url: sqlite://garner.db\n", []string{"three slashes"}},
 		{"bad proxy", minimal + "  trusted_proxies: [\"10.0.0.0/33\"]\n", []string{"server.trusted_proxies[0]"}},
-		{"arch all", minimal + "deb:\n  architectures: [amd64, all]\n", []string{`"all" is implicit`}},
-		{"duplicate suite", minimal + "deb:\n  suites: [stable, stable]\n", []string{"listed twice"}},
+		{"arch all", serverOnly + "deb:\n  architectures: [amd64, all]\n", []string{`"all" is implicit`}},
+		{"duplicate suite", serverOnly + "deb:\n  suites: [stable, stable]\n", []string{"listed twice"}},
 		{"bad enum", minimal + "defaults:\n  verify: sometimes\n", []string{"defaults.verify"}},
 		{"forge without url", minimal + "forges:\n  - {name: f, type: forgejo}\n", []string{"url: is required"}},
 		{"forge over http", minimal + "forges:\n  - {name: f, type: forgejo, url: \"http://git\"}\n", []string{"https URL"}},
@@ -88,6 +129,9 @@ func TestInvalid(t *testing.T) {
 		{"unknown suite", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", suite: nobel}\n", []string{`unknown suite "nobel" (deb.suites: stable)`}},
 		{"bad glob", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, owns: [\"[a-\"]}\n", []string{"sources[0].owns[0]"}},
 		{"bad checksums glob", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, checksums: [\"ok\", \"[x\"]}\n", []string{"sources[0].checksums[1]"}},
+		{"no format", serverOnly, []string{"no package format is configured"}},
+		{"suite without deb", serverOnly + "rpm: {}\nforges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", suite: stable}\n", []string{"sources[0].assets[0].suite: set, but deb is not configured"}},
+		{"release without rpm", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", release: stable}\n", []string{"sources[0].assets[0].release: set, but rpm is not configured"}},
 		{"source override", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, retention: 0}\n", []string{"sources[0].retention"}},
 	}
 	for _, tt := range tests {
@@ -107,7 +151,7 @@ func TestInvalid(t *testing.T) {
 }
 
 func TestAllProblemsReportedAtOnce(t *testing.T) {
-	_, err := Parse([]byte("log:\n  format: xml\n  level: loud\n"))
+	_, err := Parse([]byte("deb: {}\nlog:\n  format: xml\n  level: loud\n"))
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("err = %v", err)

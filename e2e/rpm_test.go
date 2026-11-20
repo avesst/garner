@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -52,6 +53,18 @@ func (e *containerEnv) current() string {
 	return cur
 }
 
+// status returns the HTTP status of a GET of path.
+func (e *containerEnv) status(path string) int {
+	e.t.Helper()
+	c := http.Client{Timeout: 10 * time.Second}
+	resp, err := c.Get(e.url + path)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 // waitPublish waits until public/current moves away from prev, so the
 // publish garner schedules at start has run.
 func (e *containerEnv) waitPublish(prev string) {
@@ -78,10 +91,10 @@ func (e *containerEnv) waitLog(substr string, d time.Duration) bool {
 	return false
 }
 
-// garner starts once without the rpm tools, so rpm is disabled, and then
-// with them again. The rpm packages must still be there: a missing tool
-// is not a request to delete a format's packages.
-func TestRpmSurvivesStartWithoutTools(t *testing.T) {
+// garner starts once without the rpm section, so rpm is disabled, and then
+// with it again. The rpm packages must still be there: disabling a format
+// is not a request to delete its packages.
+func TestRpmSurvivesSectionRemoval(t *testing.T) {
 	e := newContainerEnv(t)
 	e.uploadRPM()
 	e.api(http.MethodPost, "/api/v1/publish", nil)
@@ -89,21 +102,52 @@ func TestRpmSurvivesStartWithoutTools(t *testing.T) {
 		t.Fatalf("setup: dnf failed before the restart: %v\n%s", err, out)
 	}
 
-	// createrepo_c, rpmsign and gpg live in /usr/bin in the image.
 	prev := e.current()
-	e.restart("-e", "PATH=/usr/local/bin")
-	logs, _ := exec.Command("docker", "logs", e.name).CombinedOutput()
-	if !strings.Contains(string(logs), "rpm support disabled") {
-		t.Fatalf("setup: rpm was not disabled:\n%s", logs)
-	}
+	e.writeConfigWith("deb:\n  suites: [stable]\n", "")
+	e.restart()
 	e.waitPublish(prev) // the start-up publish: the format set changed
+	if code := e.status("/rpm/stable/x86_64/repodata/repomd.xml"); code != http.StatusNotFound {
+		t.Fatalf("rpm still served without its section: HTTP %d", code)
+	}
+	if !e.waitLog("packages of a format that is not configured are kept but not served", 30*time.Second) {
+		t.Fatal("no warning about the stored rpm packages that are no longer served")
+	}
 
 	prev = e.current()
+	e.writeConfig("")
 	e.restart()
 	e.waitPublish(prev)
 	if out, err := e.dnfInstall(); err != nil || !strings.Contains(out, "hello 2.0") {
-		t.Fatalf("rpm packages gone after one start without the rpm tools: %v\n%s", err, out)
+		t.Fatalf("rpm packages gone after one start without the rpm section: %v\n%s", err, out)
 	}
+}
+
+// A configured rpm without its tools is an error, not a silent fallback
+// to deb only.
+func TestRpmConfiguredWithoutToolsRefusesToStart(t *testing.T) {
+	e := newContainerEnv(t)
+	if out, err := exec.Command("docker", "rm", "-f", e.name).CombinedOutput(); err != nil {
+		t.Fatalf("docker rm: %v\n%s", err, out)
+	}
+	// createrepo_c, rpmsign and gpg live in /usr/bin in the image. Killing
+	// the docker CLI on timeout would leave the container running, so it
+	// is named and removed explicitly.
+	name := e.name + "-notools"
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", name, "--user", e.user,
+		"--network", "host", "-v", e.dir+":/data:z", "-e", "PATH=/usr/local/bin", imageTag,
+		"serve", "--config", "/data/garner.yaml").CombinedOutput()
+	if err == nil || ctx.Err() != nil {
+		exec.Command("docker", "rm", "-f", name).Run() // free the port for the start below
+		t.Fatalf("garner started without the rpm tools (err %v):\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "rpm is configured: missing tools: createrepo_c") ||
+		!strings.Contains(string(out), "install them, or remove the rpm section") {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+	e.start() // and it starts again with them
 }
 
 // The documented key rotation done with restarts instead

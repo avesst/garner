@@ -49,6 +49,17 @@ key.
 Every key is optional unless marked
 .BR required .
 A key you leave out keeps its default.
+The format sections,
+.B deb
+and
+.BR rpm ,
+are the exception: a format is enabled by its section being present, and
+at least one is required.
+An empty section
+.RB ( deb:
+or
+.BR "deb: {}" )
+enables the format with the defaults below.
 .SH VALUE FORMATS
 .TP
 .I duration
@@ -226,6 +237,8 @@ To rotate keys: add the new key second, wait for clients to fetch the
 keyring, move the new key first, then remove the old key.
 Promoting a new key re\-signs every rpm package from its original.
 .SH DEB
+Present: garner serves an apt repository.
+Absent: deb is disabled.
 .TP
 .BR architectures " (\fIlist\fR, default " [amd64] )
 Debian architectures to publish.
@@ -251,7 +264,10 @@ and sources without asset rules use it, and its client file is served at
 the root, the others below
 .IR clients/<suite>/ .
 .SH RPM
-rpm support also needs
+Present: garner serves dnf repositories.
+Absent: rpm is disabled.
+.PP
+rpm also needs
 .BR createrepo_c ,
 .BR rpmsign ,
 .B gpg
@@ -259,9 +275,16 @@ and
 .B gpgconf
 on
 .BR PATH .
-Without them
+With the section present and a tool missing,
 .B serve
-disables rpm and logs which tools are missing.
+refuses to start and names the missing tools.
+.PP
+Removing a format's section keeps its packages stored, but no longer serves
+them, and
+.B serve
+logs a warning about them at every start; adding the section back serves
+them again, re-signed if the key changed meanwhile.
+Uploads and synced assets of a disabled format are rejected.
 .TP
 .BR architectures " (\fIlist\fR, default " [x86_64] )
 rpm architectures to publish.
@@ -481,13 +504,9 @@ Some asset names are always skipped:
 .B \%*\-dbgsym*
 and
 .BR \%*\-debuginfo* ,
-and files without a
-.B .deb
-or
-.B .rpm
-extension (or
-.B .rpm
-when rpm is disabled).
+and files without the extension of an enabled format
+.RB ( .deb ,
+.BR .rpm ).
 .PP
 On its first run, a source syncs only the latest release of each
 repository.
@@ -504,14 +523,20 @@ Target for
 .B .deb
 assets.
 Must be listed in
-.BR deb.suites .
+.BR deb.suites ,
+so
+.B deb
+must be configured.
 .TP
 .BR release " (\fIrelease name\fR, default empty)"
 Target for
 .B .rpm
 assets.
 Must be listed in
-.BR rpm.releases .
+.BR rpm.releases ,
+so
+.B rpm
+must be configured.
 .PP
 Set
 .BR suite ,
@@ -543,7 +568,10 @@ the running configuration stays active until you restart:
 .BR server.listen ,
 .BR metrics.listen ,
 .BR database.url ,
-.BR storage.path .
+.BR storage.path ,
+and adding or removing a format section
+.RB ( deb ,
+.BR rpm ).
 .PP
 A reload restarts only the sources whose effective settings changed,
 including inherited defaults and their forge's settings.

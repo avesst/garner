@@ -3,6 +3,7 @@
 # 2. Run init as the garner user; it prints the admin token:
 #      sudo -u garner garner init
 # 3. systemctl enable --now garner
-# rpm support needs createrepo_c, rpmsign and gpg, which the package
-# recommends.
+# The rpm section of garner.yaml needs createrepo_c, rpmsign, gpg and
+# gpgconf, which the package recommends. Without them garner does not
+# start: install them, or remove the rpm section.
 

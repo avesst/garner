@@ -34,7 +34,7 @@ type Format struct {
 var _ format.Format = (*Format)(nil)
 
 // NewFormat finds the external tools. It fails with the list of missing
-// ones, so the caller can disable rpm with a clear message.
+// ones, so the caller can refuse to start with a clear message.
 func NewFormat(signer func() signing.Signer) (*Format, error) {
 	f := &Format{Signer: signer}
 	var missing []string
@@ -50,7 +50,7 @@ func NewFormat(signer func() signing.Signer) (*Format, error) {
 		*t.dst = p
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("missing tools: %s", strings.Join(missing, ", "))
 	}
 	return f, nil
 }

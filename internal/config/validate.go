@@ -45,10 +45,18 @@ func (c *Config) Validate() error {
 			p.add(fmt.Sprintf("signing.keys[%d].key_file", i), "is required")
 		}
 	}
-	validateList(&p, "deb.architectures", c.Deb.Architectures, reDebArch, "all")
-	validateList(&p, "deb.suites", c.Deb.Suites, reDistribution, "")
-	validateList(&p, "rpm.architectures", c.RPM.Architectures, reRPMArch, "noarch")
-	validateList(&p, "rpm.releases", c.RPM.Releases, reDistribution, "")
+	if c.Deb == nil && c.RPM == nil {
+		// About the whole file, so no key path.
+		p = append(p, "no package format is configured; add a deb or rpm section")
+	}
+	if c.Deb != nil {
+		validateList(&p, "deb.architectures", c.Deb.Architectures, reDebArch, "all")
+		validateList(&p, "deb.suites", c.Deb.Suites, reDistribution, "")
+	}
+	if c.RPM != nil {
+		validateList(&p, "rpm.architectures", c.RPM.Architectures, reRPMArch, "noarch")
+		validateList(&p, "rpm.releases", c.RPM.Releases, reDistribution, "")
+	}
 	validateSettings(&p, "defaults", c.Defaults.Retention, c.Defaults.PollInterval,
 		c.Defaults.Verify, c.Defaults.Approval)
 	forges := c.validateForges(&p)
@@ -322,10 +330,18 @@ func (c *Config) validateAssets(p *problems, sp string, rules []AssetRule) {
 		if r.Suite == "" && r.Release == "" {
 			p.add(rp, "set suite, release or both")
 		}
-		if r.Suite != "" && !slices.Contains(c.Deb.Suites, r.Suite) {
+		switch {
+		case r.Suite == "":
+		case c.Deb == nil:
+			p.add(rp+".suite", "set, but deb is not configured")
+		case !slices.Contains(c.Deb.Suites, r.Suite):
 			p.add(rp+".suite", "unknown suite %q (deb.suites: %s)", r.Suite, strings.Join(c.Deb.Suites, ", "))
 		}
-		if r.Release != "" && !slices.Contains(c.RPM.Releases, r.Release) {
+		switch {
+		case r.Release == "":
+		case c.RPM == nil:
+			p.add(rp+".release", "set, but rpm is not configured")
+		case !slices.Contains(c.RPM.Releases, r.Release):
 			p.add(rp+".release", "unknown release %q (rpm.releases: %s)", r.Release, strings.Join(c.RPM.Releases, ", "))
 		}
 	}

@@ -26,8 +26,10 @@ type Config struct {
 	Database Database `yaml:"database"`
 	Storage  Storage  `yaml:"storage"`
 	Signing  Signing  `yaml:"signing"`
-	Deb      Deb      `yaml:"deb"`
-	RPM      RPM      `yaml:"rpm"`
+	// Deb and RPM are nil when the file has no such section: a format is
+	// enabled by its section being present.
+	Deb      *Deb     `yaml:"deb"`
+	RPM      *RPM     `yaml:"rpm"`
 	Defaults Defaults `yaml:"defaults"`
 	Forges   []Forge  `yaml:"forges"`
 	Sources  []Source `yaml:"sources"`
@@ -188,7 +190,9 @@ func (c *Config) Settings(s Source) Settings {
 
 // Default returns a configuration with every default from the design filled
 // in. Loading decodes the file on top of it, so keys the file leaves out keep
-// these values.
+// these values. Both format sections are filled in, so a section the file
+// sets keeps the defaults of the keys it leaves out; Parse then drops the
+// sections the file does not have.
 func Default() *Config {
 	return &Config{
 		Server: Server{
@@ -204,8 +208,8 @@ func Default() *Config {
 			SnapshotRetention: 30,
 			MaxPackageSize:    2 << 30,
 		},
-		Deb: Deb{Architectures: []string{"amd64"}, Suites: []string{"stable"}},
-		RPM: RPM{Architectures: []string{"x86_64"}, Releases: []string{"stable"}},
+		Deb: defaultDeb(),
+		RPM: defaultRPM(),
 		Defaults: Defaults{
 			Retention:    3,
 			PollInterval: time.Hour,
@@ -213,6 +217,26 @@ func Default() *Config {
 			Approval:     "auto",
 		},
 	}
+}
+
+func defaultDeb() *Deb {
+	return &Deb{Architectures: []string{"amd64"}, Suites: []string{"stable"}}
+}
+
+func defaultRPM() *RPM {
+	return &RPM{Architectures: []string{"x86_64"}, Releases: []string{"stable"}}
+}
+
+// Formats returns the names of the configured format sections, sorted.
+func (c *Config) Formats() []string {
+	var out []string
+	if c.Deb != nil {
+		out = append(out, "deb")
+	}
+	if c.RPM != nil {
+		out = append(out, "rpm")
+	}
+	return out
 }
 
 const defaultMaxConcurrent = 4
@@ -238,6 +262,19 @@ func Parse(data []byte) (*Config, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, &ValidationError{Problems: []string{"the file contains more than one YAML document"}}
 	}
+	// Decoding leaves a preset section alone when the file lacks it, and
+	// sets it to nil for a bare "deb:". Presence is what enables a format.
+	keys := topLevelKeys(data)
+	if !keys["deb"] {
+		cfg.Deb = nil
+	} else if cfg.Deb == nil {
+		cfg.Deb = defaultDeb()
+	}
+	if !keys["rpm"] {
+		cfg.RPM = nil
+	} else if cfg.RPM == nil {
+		cfg.RPM = defaultRPM()
+	}
 	for i := range cfg.Forges {
 		if cfg.Forges[i].MaxConcurrent == 0 {
 			cfg.Forges[i].MaxConcurrent = defaultMaxConcurrent
@@ -249,6 +286,21 @@ func Parse(data []byte) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// topLevelKeys returns the keys of the document's top-level mapping, with
+// merge keys resolved. The document has already decoded, so errors are not
+// possible here.
+func topLevelKeys(data []byte) map[string]bool {
+	var m map[string]any
+	keys := map[string]bool{}
+	if yaml.Unmarshal(data, &m) != nil {
+		return keys
+	}
+	for k := range m {
+		keys[k] = true
+	}
+	return keys
 }
 
 // decodeError turns a YAML decoding error into a ValidationError, keeping

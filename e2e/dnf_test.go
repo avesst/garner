@@ -79,8 +79,18 @@ func newContainerEnv(t *testing.T) *containerEnv {
 	return e
 }
 
-// writeConfig writes garner.yaml with extra appended at the top level.
+// bothFormats configures deb and rpm.
+const bothFormats = "deb:\n  suites: [stable]\nrpm:\n  architectures: [x86_64]\n  releases: [stable]\n"
+
+// writeConfig writes garner.yaml with both formats and extra appended at
+// the top level.
 func (e *containerEnv) writeConfig(extra string) {
+	e.t.Helper()
+	e.writeConfigWith(bothFormats, extra)
+}
+
+// writeConfigWith writes garner.yaml with the given format sections.
+func (e *containerEnv) writeConfigWith(formats, extra string) {
 	e.t.Helper()
 	cfg := fmt.Sprintf(`server:
   listen: %s
@@ -91,12 +101,7 @@ database:
   url: sqlite:///data/garner.db
 storage:
   path: /data
-deb:
-  suites: [stable]
-rpm:
-  architectures: [x86_64]
-  releases: [stable]
-%s`, e.addr, e.url, extra)
+%s%s`, e.addr, e.url, formats, extra)
 	if err := os.WriteFile(filepath.Join(e.dir, "garner.yaml"), []byte(cfg), 0o644); err != nil {
 		e.t.Fatal(err)
 	}

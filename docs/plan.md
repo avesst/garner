@@ -70,7 +70,7 @@ Caddy:
 |---|---|---|
 | CLI library: standard `flag` or a framework | Slice 1 | Implemented with `flag` plus a helper that accepts flags after positional arguments |
 | Snapshot retention default | Slice 7 | Implemented as a count (`storage.snapshot_retention`, 30); age and `snapshot keep` are open |
-| rpm when its tools are missing | Slice 8 | Implemented: rpm off, and `serve` names the missing tools; rpm packages stay stored and come back when the tools do |
+| rpm when its tools are missing | Slice 8 | Changed before 0.1.0: a format is enabled by its config section. A configured rpm without its tools refuses to start and names them; removing the section keeps rpm packages stored, and they come back with it |
 | One deb in several suites | Step 2 | `suite: [noble, jammy]` and repeated `?suite=` |
 | Packaging garner (nfpm or GoReleaser; `.rpm` too?) | Step 5 | GoReleaser (nfpm inside): `.deb` and `.rpm` for amd64, installed and removed in Debian, Ubuntu, AlmaLinux and Fedora containers by `just test-packages` in CI; a semver tag makes a draft GitHub release. The `.deb` runs under systemd on the test host |
 | Default deployment | 0.1.0 | Proxy serves `public/`; README "Reverse proxy" |

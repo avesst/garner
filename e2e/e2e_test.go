@@ -22,6 +22,8 @@ import (
 
 	"github.com/avesst/garner/internal/app"
 	"github.com/avesst/garner/internal/auth"
+	"github.com/avesst/garner/internal/config"
+	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/signing"
 )
@@ -39,7 +41,7 @@ type env struct {
 	onFile map[string]func() // path suffix -> hook run once before serving
 }
 
-func newEnv(t *testing.T, extraConfig string, formats ...format.Format) *env {
+func newEnv(t *testing.T, extraConfig string) *env {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not installed")
@@ -71,7 +73,9 @@ deb:
 	if _, err := signing.Generate(keyPath, "e2e repository", ""); err != nil {
 		t.Fatal(err)
 	}
-	a, err := app.Open(context.Background(), cfgPath, "e2e", formats...)
+	a, err := app.Open(context.Background(), cfgPath, "e2e", func(*config.Config) ([]format.Format, error) {
+		return []format.Format{deb.Format{}}, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

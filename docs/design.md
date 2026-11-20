@@ -356,6 +356,11 @@ sources:
 Every suite or release referenced in `assets` must exist in `deb.suites` or
 `rpm.releases`. Validation rejects unknown ones.
 
+A format is enabled by its section being present (`deb:`, `rpm:`); an empty
+section uses the defaults, and at least one format is required. Adding or
+removing a section takes a restart, because formats are built once at
+start. A removed section keeps the format's packages stored but unserved.
+
 ## 6. Data model
 
 The schema is portable across SQLite and PostgreSQL: no `JSONB`, no arrays, no
@@ -495,7 +500,7 @@ not trusted.
 **Asset selection.**
 
 - Candidates: assets with the extension of an enabled format (`*.deb`,
-  and `*.rpm` when rpm support is enabled), excluding `*.src.rpm`,
+  `*.rpm`), excluding `*.src.rpm`,
   `*-dbgsym*`, `*-debuginfo*`, plus the source's `exclude` list. With asset
   rules, an asset whose name matches no rule is not a candidate either.
   These checks use the name only, so other assets are never downloaded.
@@ -606,8 +611,8 @@ repodata itself instead of using `createrepo_c --retain-old-md`, because each
 snapshot is rendered into a fresh directory.
 
 rpm support needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`
-(the container image ships them). Without them, `serve` disables rpm and
-says which tools are missing.
+(the container image ships them). With `rpm:` configured and a tool
+missing, `serve` refuses to start and says which tools are missing.
 
 ### Rollback and pinning
 
@@ -878,7 +883,8 @@ of them, not just the formats that resemble deb and rpm.
   server rejects two formats claiming the same one. garner's own routes stay
   under `/api/`, `/snapshots/` and the few files listed in section 4.
 - **Configuration.** Format settings live in a section named after the
-  format, as `deb:` and `rpm:` do. Validation is delegated to the format.
+  format, as `deb:` and `rpm:` do, and the section's presence enables the
+  format. Validation is delegated to the format.
 - **Serving model.** A format either renders static files into snapshots (deb,
   rpm, and probably PyPI) or needs live endpoints served by garner (OCI).
   Both are supported by the interface. A live format cannot be served by

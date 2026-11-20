@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +24,6 @@ import (
 	"github.com/avesst/garner/internal/blob"
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/db"
-	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/ingest"
 	"github.com/avesst/garner/internal/metrics"
@@ -152,9 +153,13 @@ func (h logHandler) derive(f func(slog.Handler) slog.Handler) logHandler {
 	return h
 }
 
+// FormatsFunc returns the formats a configuration enables, one per
+// configured format section.
+type FormatsFunc func(*config.Config) ([]format.Format, error)
+
 // Open loads the configuration, takes the database lock and builds every
-// part. Formats are the enabled formats; deb is always enabled.
-func Open(ctx context.Context, configPath, version string, extra ...format.Format) (*App, error) {
+// part. formats builds the enabled formats from the configuration.
+func Open(ctx context.Context, configPath, version string, formats FormatsFunc) (*App, error) {
 	h, err := config.NewHolder(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", configPath, err)
@@ -193,8 +198,15 @@ func Open(ctx context.Context, configPath, version string, extra ...format.Forma
 		return nil, fmt.Errorf("signing key: %w (run garner init to generate one)", err)
 	}
 	a.keys.Store(keys)
-	if a.Formats, err = format.NewRegistry(append([]format.Format{deb.Format{}}, extra...)...); err != nil {
+	fms, err := formats(cfg)
+	if err != nil {
 		return nil, err
+	}
+	if a.Formats, err = format.NewRegistry(fms...); err != nil {
+		return nil, err
+	}
+	if got := a.Formats.Names(); !slices.Equal(got, cfg.Formats()) {
+		return nil, fmt.Errorf("formats %v do not match the configured sections %v", got, cfg.Formats())
 	}
 	a.refreshCommit()
 
@@ -268,6 +280,11 @@ func (a *App) Reload() error {
 		if old.Metrics.Listen != new.Metrics.Listen {
 			restart = append(restart, "metrics.listen")
 		}
+		// Formats are built once at start, so adding or removing a
+		// format section takes a restart.
+		if !slices.Equal(old.Formats(), new.Formats()) {
+			restart = append(restart, "the format sections")
+		}
 		if len(restart) > 0 {
 			return fmt.Errorf("changing %s needs a restart", strings.Join(restart, ", "))
 		}
@@ -295,6 +312,35 @@ func (a *App) Reload() error {
 	return nil
 }
 
+// unconfiguredFormats returns the stored formats that have no format
+// registered, with their package counts.
+func (a *App) unconfiguredFormats(ctx context.Context) (map[string]store.FormatCount, error) {
+	counts, err := a.Store.FormatCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for name := range counts {
+		if _, ok := a.Formats.Get(name); ok {
+			delete(counts, name)
+		}
+	}
+	return counts, nil
+}
+
+// warnUnconfiguredFormats logs stored packages that are kept but not
+// served, because their format's section is missing.
+func (a *App) warnUnconfiguredFormats(ctx context.Context) {
+	missing, err := a.unconfiguredFormats(ctx)
+	if err != nil {
+		a.Log.Error("cannot list stored formats", "err", err)
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(missing)) {
+		a.Log.Warn("packages of a format that is not configured are kept but not served; add its section to serve them",
+			"format", name, "packages", missing[name].Total)
+	}
+}
+
 // resignIfNeeded re-signs packages when the signing key differs from
 // the one they were last signed with: after a reload or a restart with a
 // new key, or after a re-sign that did not finish. Then it publishes.
@@ -315,7 +361,25 @@ func (a *App) resignIfNeeded(ctx context.Context) error {
 		return err
 	}
 	a.Log.Info("re-signed packages", "count", n)
-	if err := a.Store.SetSignedWith(ctx, fp); err != nil {
+	// Re-signed packages of a format that is not configured were skipped.
+	// Recording the key would mark them done, so they are re-signed once
+	// their section is back. Formats whose packages are not re-signed do
+	// not hold it back.
+	missing, err := a.unconfiguredFormats(ctx)
+	if err != nil {
+		a.Log.Error("cannot list stored formats", "err", err)
+		return err
+	}
+	var pending []string
+	for _, name := range slices.Sorted(maps.Keys(missing)) {
+		if missing[name].Signed > 0 {
+			pending = append(pending, name)
+		}
+	}
+	if len(pending) > 0 {
+		a.Log.Warn("signing key not recorded: packages of formats that are not configured still need re-signing",
+			"formats", pending)
+	} else if err := a.Store.SetSignedWith(ctx, fp); err != nil {
 		a.Log.Error("cannot record the signing key", "err", err)
 		return err
 	}
@@ -422,6 +486,7 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 		wg.Add(1)
 		go func() { defer wg.Done(); fn(ctx) }()
 	}
+	a.warnUnconfiguredFormats(ctx)
 	run(a.Scheduler.Run)
 	run(a.Resigner.Run)
 	a.Resigner.Request() // the key may have changed while garner was stopped

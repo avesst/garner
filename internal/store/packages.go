@@ -290,6 +290,32 @@ func (q *Queries) SignedPackages(ctx context.Context, formatName string) ([]*for
 	return out, rows.Err()
 }
 
+// FormatCount is how many packages of a format are stored, and how many
+// of those have a re-signed variant.
+type FormatCount struct {
+	Total, Signed int
+}
+
+// FormatCounts returns the stored packages per format.
+func (q *Queries) FormatCounts(ctx context.Context) (map[string]FormatCount, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT format, COUNT(*), COUNT(signed_blob_sha256)
+		FROM packages WHERE repository_id = ? GROUP BY format`, RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]FormatCount{}
+	for rows.Next() {
+		var name string
+		var c FormatCount
+		if err := rows.Scan(&name, &c.Total, &c.Signed); err != nil {
+			return nil, err
+		}
+		out[name] = c
+	}
+	return out, rows.Err()
+}
+
 // SignedWith returns the fingerprint of the key packages were last
 // re-signed with, or "" if that is unknown.
 func (q *Queries) SignedWith(ctx context.Context) (string, error) {

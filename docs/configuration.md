@@ -17,7 +17,10 @@ where to sync from and how to sign. Everything garner learns while running
   `*_env` key.
 
 Every key is optional unless marked **required**. A key you leave out keeps
-its default.
+its default. The format sections, `deb` and `rpm`, are the exception: a
+format is enabled by its section being present, and at least one is
+required. An empty section (`deb:` or `deb: {}`) enables the format with
+the defaults below.
 
 ## Value formats
 
@@ -91,6 +94,8 @@ Promoting a new key re-signs every rpm package from its original.
 
 ## `deb`
 
+Present: garner serves an apt repository. Absent: deb is disabled.
+
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `architectures` | list | `[amd64]` | Debian architectures to publish. Lowercase letters, digits and `-`. Don't list `all`: architecture-independent packages are published under every listed architecture automatically. |
@@ -98,8 +103,16 @@ Promoting a new key re-signs every rpm package from its original.
 
 ## `rpm`
 
-rpm support also needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on
-`PATH`. Without them `serve` disables rpm and logs which tools are missing.
+Present: garner serves dnf repositories. Absent: rpm is disabled.
+
+rpm also needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`. With
+the section present and a tool missing, `serve` refuses to start and names
+the missing tools.
+
+Removing a format's section keeps its packages stored, but no longer serves
+them, and `serve` logs a warning about them at every start; adding the
+section back serves them again, re-signed if the key changed meanwhile. Uploads and synced assets
+of a disabled format are rejected.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -167,8 +180,8 @@ A source can also set `retention`, `poll_interval`, `verify`, `approval` and
 The same rules apply.
 
 Some asset names are always skipped: `*.src.rpm`, `*-dbgsym*` and
-`*-debuginfo*`, and files without a `.deb` or `.rpm` extension (or `.rpm`
-when rpm is disabled).
+`*-debuginfo*`, and files without the extension of an enabled format
+(`.deb`, `.rpm`).
 
 On its first run, a source syncs only the latest release of each repository.
 Later runs pick up every release published since then.
@@ -180,8 +193,8 @@ Each entry of `assets`:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `match` | glob, **required** | none | Asset file names this rule applies to. |
-| `suite` | suite name | empty | Target for `.deb` assets. Must be listed in `deb.suites`. |
-| `release` | release name | empty | Target for `.rpm` assets. Must be listed in `rpm.releases`. |
+| `suite` | suite name | empty | Target for `.deb` assets. Must be listed in `deb.suites`, so `deb` must be configured. |
+| `release` | release name | empty | Target for `.rpm` assets. Must be listed in `rpm.releases`, so `rpm` must be configured. |
 
 Set `suite`, `release` or both. Rules are evaluated in order. The first rule
 whose `match` fits the asset name and that sets a target for the asset's
@@ -204,6 +217,7 @@ active until you restart:
 - `metrics.listen`
 - `database.url`
 - `storage.path`
+- adding or removing a format section (`deb`, `rpm`)
 
 A reload restarts only the sources whose effective settings changed,
 including inherited defaults and their forge's settings. The others keep

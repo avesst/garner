@@ -3,27 +3,35 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"path/filepath"
 
 	"github.com/avesst/garner/internal/app"
 	"github.com/avesst/garner/internal/config"
+	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/rpm"
 	"github.com/avesst/garner/internal/signing"
 	gsync "github.com/avesst/garner/internal/sync"
 )
 
-// extraFormats returns the formats enabled besides deb. rpm needs
-// createrepo_c, rpmsign and gpg; without them it is disabled with a
-// warning. signer is resolved after the app is opened.
-func extraFormats(signer func() signing.Signer, stderr io.Writer) []format.Format {
-	f, err := rpm.NewFormat(signer)
-	if err != nil {
-		fmt.Fprintf(stderr, "garner: rpm support disabled: %v\n", err)
-		return nil
+// formats builds a format for each configured section. A configured rpm
+// needs createrepo_c, rpmsign, gpg and gpgconf; without them garner does
+// not start. signer is resolved after the app is opened.
+func formats(signer func() signing.Signer) app.FormatsFunc {
+	return func(cfg *config.Config) ([]format.Format, error) {
+		var out []format.Format
+		if cfg.Deb != nil {
+			out = append(out, deb.Format{})
+		}
+		if cfg.RPM != nil {
+			f, err := rpm.NewFormat(signer)
+			if err != nil {
+				return nil, fmt.Errorf("rpm is configured: %w (install them, or remove the rpm section)", err)
+			}
+			out = append(out, f)
+		}
+		return out, nil
 	}
-	return []format.Format{f}
 }
 
 var syncManager *gsync.Manager
