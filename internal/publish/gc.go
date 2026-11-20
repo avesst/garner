@@ -150,10 +150,23 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	recorded := map[string]bool{}
+	for _, s := range snaps {
+		recorded[s.ID] = true
+	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") && old(e) {
+		switch {
+		case !old(e) || recorded[e.Name()]:
+		case strings.HasSuffix(e.Name(), ".tmp"):
 			os.RemoveAll(filepath.Join(p.snapshotsDir(), e.Name()))
 			res.TempFiles++
+		default:
+			// Renamed into place, but the publish crashed before
+			// recording it.
+			if err := os.RemoveAll(filepath.Join(p.snapshotsDir(), e.Name())); err != nil {
+				return nil, err
+			}
+			res.Snapshots = append(res.Snapshots, e.Name())
 		}
 	}
 	p.Log.Info("gc finished", "snapshots", len(res.Snapshots), "blobs", res.Blobs,

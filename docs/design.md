@@ -631,7 +631,10 @@ says which tools are missing.
    (default 10 min) since it stopped being current, so requests already
    resolved through it can finish. A snapshot that never became current,
    left by a publish that crashed before the swap, gets the grace from its
-   creation. A publish that fails without crashing removes its snapshot.
+   creation. A crash before the snapshot is recorded leaves a directory
+   without a row, removed once `gc_grace` has passed since it was
+   written. A publish that fails without crashing, cancelled ones
+   included, removes its snapshot.
 
 ## 10. Signing
 

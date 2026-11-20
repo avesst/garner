@@ -306,7 +306,8 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 	}
 	ok = true
 	if err := p.activate(ctx, cfg, snap, pkgs); err != nil {
-		p.discard(ctx, snap.ID)
+		// The publish may have failed because ctx was cancelled.
+		p.discard(context.WithoutCancel(ctx), snap.ID)
 		return nil, err
 	}
 	snap.IsCurrent = true

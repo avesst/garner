@@ -592,6 +592,70 @@ func TestDiscardKeepsLinkedSnapshot(t *testing.T) {
 	}
 }
 
+// cancelOnSign cancels the publish context while the snapshot renders,
+// as a shutdown arriving mid-publish does.
+type cancelOnSign struct {
+	signing.Signer
+	cancel context.CancelFunc
+}
+
+func (c cancelOnSign) ClearSign(w io.Writer, data []byte) error {
+	c.cancel()
+	return c.Signer.ClearSign(w, data)
+}
+
+// A publish cancelled after its snapshot was rendered still removes it:
+// no row would ever let GC find the directory.
+func TestCancelledPublishLeavesNoSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.add(t, "app", "1.0", "amd64")
+	s := f.publish(t)
+	f.add(t, "app", "2.0", "amd64")
+	ctx, cancel := context.WithCancel(context.Background())
+	keys := f.keys
+	f.pub.Signer = func() signing.Signer { return cancelOnSign{keys, cancel} }
+	if _, err := f.pub.Publish(ctx); err == nil {
+		t.Fatal("publish succeeded, want it cancelled")
+	}
+	rows, dirs := f.snapshotIDs(t)
+	if !slices.Equal(rows, []string{s.ID}) || !slices.Equal(dirs, []string{s.ID}) {
+		t.Errorf("rows %v, directories %v; want only %s", rows, dirs, s.ID)
+	}
+}
+
+// A crash between renaming a snapshot into place and recording it leaves
+// a directory without a row. GC removes it once gc_grace has passed.
+func TestGCRemovesUnrecordedSnapshot(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.Storage.GCGrace = time.Hour
+	f.add(t, "app", "1.0", "amd64")
+	s := f.publish(t)
+	orphan := func(age time.Duration) string {
+		name := id.New()
+		dir := filepath.Join(f.root, "snapshots", name)
+		if err := os.MkdirAll(filepath.Join(dir, "deb"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		at := time.Now().Add(-age)
+		if err := os.Chtimes(dir, at, at); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	old, fresh := orphan(2*time.Hour), orphan(0)
+	res, err := f.pub.GC(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, dirs := f.snapshotIDs(t)
+	if want := []string{s.ID, fresh}; !slices.Equal(dirs, want) {
+		t.Errorf("directories %v, want %v (old orphan %s removed)", dirs, want, old)
+	}
+	if !slices.Contains(res.Snapshots, old) {
+		t.Errorf("GC reported %v, want %s", res.Snapshots, old)
+	}
+}
+
 // gc_grace counts from when a snapshot stopped being current. A newer
 // snapshot's created_at is set before it renders, so a render longer than
 // gc_grace must not cut short the grace of the snapshot it replaces.
