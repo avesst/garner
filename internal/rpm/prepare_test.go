@@ -15,9 +15,15 @@ import (
 // rpmsign gets the key through ArmoredPrivateKey and gpg --import. A key
 // whose primary is kept offline must sign there too, protected or not.
 func TestPrepareSignsWithSubkeyExport(t *testing.T) {
-	rpmkeys, err := exec.LookPath("rpmkeys")
-	if err != nil {
-		t.Skip("rpmkeys not installed")
+	// Only the tools Prepare and the check use: NewFormat would also
+	// require createrepo_c.
+	tools := map[string]string{}
+	for _, name := range []string{"rpmsign", "rpmkeys", "gpg", "gpgconf"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not installed", name)
+		}
+		tools[name] = p
 	}
 	for _, pass := range []string{"secret", ""} {
 		name := "protected"
@@ -38,10 +44,8 @@ func TestPrepareSignsWithSubkeyExport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			f, err := NewFormat(func() signing.Signer { return k })
-			if err != nil {
-				t.Skipf("rpm tools: %v", err)
-			}
+			f := &Format{Signer: func() signing.Signer { return k },
+				rpmsign: tools["rpmsign"], gpg: tools["gpg"], gpgconf: tools["gpgconf"]}
 			tmp := filepath.Join(dir, "prepare")
 			if err := os.Mkdir(tmp, 0o700); err != nil {
 				t.Fatal(err)
@@ -60,10 +64,10 @@ func TestPrepareSignsWithSubkeyExport(t *testing.T) {
 			if err := os.WriteFile(pubAsc, armored, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command(rpmkeys, "--dbpath", dbpath, "--import", pubAsc).CombinedOutput(); err != nil {
+			if out, err := exec.Command(tools["rpmkeys"], "--dbpath", dbpath, "--import", pubAsc).CombinedOutput(); err != nil {
 				t.Fatalf("rpmkeys --import: %v\n%s", err, out)
 			}
-			out, err := exec.Command(rpmkeys, "--dbpath", dbpath, "--checksig", "-v", signed).CombinedOutput()
+			out, err := exec.Command(tools["rpmkeys"], "--dbpath", dbpath, "--checksig", "-v", signed).CombinedOutput()
 			if err != nil || !signatureOK(string(out)) {
 				t.Errorf("rpmkeys --checksig: %v\n%s", err, out)
 			}
