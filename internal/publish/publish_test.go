@@ -797,3 +797,83 @@ func TestLinkPoolStaysInPool(t *testing.T) {
 		t.Errorf("err = %v, want a pool path error", err)
 	}
 }
+
+// activeNames returns "name version" of every active placement, sorted.
+func (f *fixture) activeNames(t *testing.T) []string {
+	t.Helper()
+	pkgs, err := f.pub.Store.Placed(context.Background(), store.PackageFilter{States: []string{store.Active}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, pk := range pkgs {
+		out = append(out, pk.Name+" "+pk.Version)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A snapshot published while a format was disabled holds none of that
+// format's packages because it did not render the format, not because the
+// packages were gone. Rolling back to it must leave them alone, whether
+// the format is still disabled or back by then, so GC cannot delete them.
+func TestRollbackLeavesFormatsTheSnapshotDidNotRender(t *testing.T) {
+	for _, reenable := range []bool{false, true} {
+		name := "still disabled"
+		if reenable {
+			name = "enabled again"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.cfg.Storage.SnapshotRetention = 1
+			f.cfg.Storage.GCGrace = 0
+			enabled := f.pub.Formats
+			none, _ := format.NewRegistry()
+
+			f.add(t, "app", "1.0", "amd64")
+			f.publish(t)
+			f.pub.Formats = none // its tools went missing
+			s2 := f.publish(t)
+			if reenable {
+				f.pub.Formats = enabled
+			}
+			if _, err := f.pub.Rollback(context.Background(), s2.ID); err != nil {
+				t.Fatal(err)
+			}
+			if got := f.activeNames(t); !slices.Equal(got, []string{"app 1.0"}) {
+				t.Errorf("active after rollback = %v, want [app 1.0]", got)
+			}
+
+			f.pub.Formats = enabled
+			f.publish(t)
+			res, err := f.pub.GC(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Blobs != 0 {
+				t.Errorf("GC deleted %d blobs, want none", res.Blobs)
+			}
+			if got := f.activeNames(t); !slices.Equal(got, []string{"app 1.0"}) {
+				t.Errorf("active after GC = %v, want [app 1.0]", got)
+			}
+			if pk := f.read(t, "deb/dists/stable/main/binary-amd64/Packages"); !strings.Contains(pk, "Package: app\n") {
+				t.Errorf("app is not published:\n%s", pk)
+			}
+		})
+	}
+}
+
+// A snapshot that rendered a format without any of its packages still
+// removes them on rollback: the format was empty then.
+func TestRollbackRemovesPackagesOfRenderedEmptyFormat(t *testing.T) {
+	f := newFixture(t)
+	empty := f.publish(t)
+	f.add(t, "app", "1.0", "amd64")
+	f.publish(t)
+	if _, err := f.pub.Rollback(context.Background(), empty.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.activeNames(t); len(got) != 0 {
+		t.Errorf("active after rollback = %v, want none", got)
+	}
+}

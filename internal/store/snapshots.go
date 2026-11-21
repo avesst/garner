@@ -16,6 +16,9 @@ type Snapshot struct {
 	// ReplacedAt is when the snapshot stopped being current; "" if it is
 	// current or never was.
 	ReplacedAt string `json:"-"`
+	// Formats are the formats the snapshot rendered. Only InsertSnapshot
+	// uses it; SnapshotFormats reads it back.
+	Formats []string `json:"-"`
 }
 
 // SnapshotEntry places a package in a distribution of a snapshot.
@@ -27,11 +30,17 @@ type SnapshotEntry struct {
 	ServedSHA256 string
 }
 
-// InsertSnapshot records a snapshot and its package set.
+// InsertSnapshot records a snapshot, its formats and its package set.
 func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []SnapshotEntry) error {
 	if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshots (id, created_at, config_hash, is_current, inputs)
 		VALUES (?, ?, ?, ?, ?)`, s.ID, s.CreatedAt, s.ConfigHash, false, s.Inputs); err != nil {
 		return err
+	}
+	for _, f := range s.Formats {
+		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_formats (snapshot_id, format)
+			VALUES (?, ?)`, s.ID, f); err != nil {
+			return err
+		}
 	}
 	for _, e := range entries {
 		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_packages (snapshot_id, package_id, distribution, served_sha256)
@@ -98,6 +107,24 @@ func (q *Queries) SnapshotEntries(ctx context.Context, id string) ([]SnapshotEnt
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SnapshotFormats returns the formats a snapshot rendered.
+func (q *Queries) SnapshotFormats(ctx context.Context, id string) (map[string]bool, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT format FROM snapshot_formats WHERE snapshot_id = ?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			return nil, err
+		}
+		out[f] = true
 	}
 	return out, rows.Err()
 }

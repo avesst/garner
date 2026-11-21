@@ -145,7 +145,9 @@ func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*fo
 // Rollback publishes a new snapshot with the package set of snapshot id.
 // The package placements are changed to match, so that the next publish
 // keeps the rolled-back state: packages in the set become active again and
-// other active packages are removed.
+// other active packages are removed. Packages of a format the snapshot did
+// not render, because it was disabled then, keep their state: their
+// absence from the set does not mean they were gone.
 func (p *Publisher) Rollback(ctx context.Context, snapshotID string) (*store.Snapshot, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -165,17 +167,33 @@ func (p *Publisher) Rollback(ctx context.Context, snapshotID string) (*store.Sna
 	for _, e := range entries {
 		want[e] = true
 	}
+	rendered, err := p.Store.SnapshotFormats(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
 	all, err := p.Store.Placed(ctx, store.PackageFilter{})
 	if err != nil {
 		return nil, err
 	}
+	// Only enabled formats are published, as in Publish.
 	var pkgs []*format.Package
+	include := func(pk *format.Package) {
+		if _, ok := p.Formats.Get(pk.Format); ok {
+			pkgs = append(pkgs, pk)
+		}
+	}
 	err = p.Store.Tx(ctx, func(q *store.Queries) error {
 		for _, pk := range all {
+			if !rendered[pk.Format] {
+				if pk.State == store.Active {
+					include(pk)
+				}
+				continue
+			}
 			in := want[store.SnapshotEntry{PackageID: pk.ID, Distribution: pk.Distribution}]
 			switch {
 			case in:
-				pkgs = append(pkgs, pk)
+				include(pk)
 				if pk.State != store.Active {
 					if _, err := q.SetState(ctx, pk.ID, pk.Distribution, store.Active); err != nil {
 						return err
@@ -256,7 +274,8 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 	if err != nil {
 		return nil, err
 	}
-	snap := &store.Snapshot{ID: id.New(), CreatedAt: store.Now(), ConfigHash: cfg.Hash, Inputs: inputs}
+	snap := &store.Snapshot{ID: id.New(), CreatedAt: store.Now(), ConfigHash: cfg.Hash, Inputs: inputs,
+		Formats: p.Formats.Names()}
 	final := filepath.Join(p.snapshotsDir(), snap.ID)
 	tmp := final + ".tmp"
 	if err := os.MkdirAll(tmp, 0o755); err != nil {

@@ -382,6 +382,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
 | `snapshots` | `id`, `created_at`, `config_hash`, `is_current`, `replaced_at` | `replaced_at`: when the snapshot stopped being current, for `gc_grace`. |
 | `snapshot_packages` | `snapshot_id`, `package_id`, `distribution`, `served_sha256` | Drives GC reachability. `served_sha256` is the blob the snapshot serves the package from, kept after a re-sign replaces it. |
+| `snapshot_formats` | `snapshot_id`, `format` | The formats a snapshot rendered. A rollback changes placements only for these. |
 | `tokens` | `id`, `name`, `owner`, `scopes`, `hash`, `created_at`, `last_used_at`, `revoked_at` | sha256 of a 256-bit random secret. |
 | `events` | `id`, `at`, `actor`, `action`, `detail` | Audit log. Later, not in the MVP (section 15). |
 
@@ -623,7 +624,9 @@ missing, `serve` refuses to start and says which tools are missing.
 - Clients can pin to `/snapshots/<id>/...`.
 - A rollback also sets placements to match the rolled-back set: its
   packages become active again and other active packages are removed, so
-  the next publish keeps the rolled-back state.
+  the next publish keeps the rolled-back state. Only formats the snapshot
+  rendered take part: a format that was disabled then is missing from the
+  set without its packages being gone, so they keep their state.
 - Snapshot retention: the newest `storage.snapshot_retention` (default 30,
   at least 2).
 
