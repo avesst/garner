@@ -76,12 +76,27 @@ func TestPrepareSignsWithSubkeyExport(t *testing.T) {
 }
 
 // signatureOK reports whether rpmkeys -v found a signature that verified.
-// rpm versions word the line differently ("key ID", "key fingerprint").
+// rpm versions word the line differently: "V4 RSA/SHA512 Signature, key
+// ID ...: OK" on Ubuntu 24.04, "OpenPGP V4 RSA/SHA512 signature, key
+// fingerprint ...: OK" in rpm 6.0.
 func signatureOK(out string) bool {
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "signature") && strings.HasSuffix(strings.TrimSpace(line), ": OK") {
+		if strings.Contains(strings.ToLower(line), "signature") && strings.HasSuffix(strings.TrimSpace(line), ": OK") {
 			return true
 		}
 	}
 	return false
+}
+
+func TestSignatureOK(t *testing.T) {
+	for out, want := range map[string]bool{
+		"x.rpm:\n    Header V4 RSA/SHA512 Signature, key ID 0a7be7d4: OK\n":                                  true,
+		"x.rpm:\n    Header OpenPGP V4 RSA/SHA512 signature, key fingerprint d370b497: OK\n":                 true,
+		"x.rpm:\n    Header V4 RSA/SHA512 Signature, key ID 0a7be7d4: NOKEY\n    Header SHA256 digest: OK\n": false,
+		"x.rpm:\n    Header SHA256 digest: OK\n":                                                             false,
+	} {
+		if got := signatureOK(out); got != want {
+			t.Errorf("signatureOK(%q) = %v, want %v", out, got, want)
+		}
+	}
 }
