@@ -104,7 +104,7 @@ func loadKey(src KeySource, needPrivate bool) (*openpgp.Entity, error) {
 		}
 		return e, nil
 	}
-	if e.PrivateKey.Encrypted {
+	if encrypted(e) {
 		if src.PassphraseFile == "" {
 			return nil, errors.New("private key is encrypted and no passphrase_file is set")
 		}
@@ -117,10 +117,37 @@ func loadKey(src KeySource, needPrivate bool) (*openpgp.Entity, error) {
 			return nil, fmt.Errorf("decrypt private key: %w", err)
 		}
 	}
-	if _, ok := e.SigningKey(time.Now()); !ok && needPrivate {
+	if !needPrivate {
+		return e, nil
+	}
+	sk, ok := e.SigningKey(time.Now())
+	if !ok {
 		return nil, errors.New("key has no valid signing key (expired or revoked?)")
 	}
+	// The signing key is often a subkey, and its secret can be absent even
+	// when the primary's is there, or the other way round.
+	if sk.PrivateKey == nil || sk.PrivateKey.Dummy() {
+		return nil, fmt.Errorf("the secret of signing key %X is not in the file", sk.PublicKey.KeyId)
+	}
+	if sk.PrivateKey.Encrypted {
+		return nil, fmt.Errorf("signing key %X is still encrypted", sk.PublicKey.KeyId)
+	}
 	return e, nil
+}
+
+// encrypted reports whether any secret key in e that is present needs a
+// passphrase. With the primary kept offline, only subkeys are present.
+func encrypted(e *openpgp.Entity) bool {
+	keys := []*packet.PrivateKey{e.PrivateKey}
+	for _, s := range e.Subkeys {
+		keys = append(keys, s.PrivateKey)
+	}
+	for _, k := range keys {
+		if k != nil && !k.Dummy() && k.Encrypted {
+			return true
+		}
+	}
+	return false
 }
 
 func (k *Keyring) signer() *openpgp.Entity { return k.entities[0] }

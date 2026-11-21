@@ -11,6 +11,8 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
+
+	"github.com/avesst/garner/internal/signing/signingtest"
 )
 
 // testKey generates a 2048-bit key, which is much faster than the 4096-bit
@@ -200,6 +202,69 @@ func TestEncryptedKeyNeedsPassphrase(t *testing.T) {
 	var sig bytes.Buffer
 	if err := k.DetachSign(&sig, []byte("x")); err != nil {
 		t.Errorf("sign with decrypted key: %v", err)
+	}
+}
+
+// A key whose primary is kept offline signs with its subkey, which
+// passphrase_file must decrypt even though the primary is not encrypted.
+func TestSubkeyExportSigns(t *testing.T) {
+	gpgv, err := exec.LookPath("gpgv")
+	if err != nil {
+		t.Skip("gpgv not installed")
+	}
+	for _, pass := range []string{"secret", ""} {
+		name := "protected"
+		if pass == "" {
+			name = "unprotected"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			key, keyring := signingtest.SubkeyExport(t, dir, pass)
+			src := KeySource{KeyFile: key}
+			if pass != "" {
+				src.PassphraseFile = filepath.Join(dir, "pass")
+				write(t, src.PassphraseFile, []byte(pass+"\n"))
+			}
+			k, err := Load([]KeySource{src})
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := []byte("Origin: garner\n")
+			var inRelease, sig bytes.Buffer
+			if err := k.ClearSign(&inRelease, data); err != nil {
+				t.Fatalf("ClearSign: %v", err)
+			}
+			if err := k.DetachSign(&sig, data); err != nil {
+				t.Fatalf("DetachSign: %v", err)
+			}
+			write(t, filepath.Join(dir, "InRelease"), inRelease.Bytes())
+			write(t, filepath.Join(dir, "Release"), data)
+			write(t, filepath.Join(dir, "Release.gpg"), sig.Bytes())
+			runGpgv(t, gpgv, keyring, filepath.Join(dir, "InRelease"))
+			runGpgv(t, gpgv, keyring, filepath.Join(dir, "Release.gpg"), filepath.Join(dir, "Release"))
+		})
+	}
+}
+
+// A protected signing subkey fails at Load, not at the first publish.
+func TestSubkeyExportNeedsPassphrase(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := signingtest.SubkeyExport(t, dir, "secret")
+	if _, err := Load([]KeySource{{KeyFile: key}}); err == nil || !strings.Contains(err.Error(), "passphrase_file") {
+		t.Errorf("no passphrase: err = %v", err)
+	}
+	wrong := filepath.Join(dir, "wrong")
+	write(t, wrong, []byte("nope\n"))
+	if _, err := Load([]KeySource{{KeyFile: key, PassphraseFile: wrong}}); err == nil {
+		t.Error("wrong passphrase accepted")
+	}
+}
+
+// A file without the signing key's secret fails at Load.
+func TestStubSigningKeyFailsAtLoad(t *testing.T) {
+	key, _ := signingtest.StubSigner(t, t.TempDir())
+	if _, err := Load([]KeySource{{KeyFile: key}}); err == nil || !strings.Contains(err.Error(), "not in the file") {
+		t.Errorf("err = %v, want the missing secret named", err)
 	}
 }
 
