@@ -87,9 +87,19 @@ func debOnly(*config.Config) ([]format.Format, error) {
 // a signing key and opens the app.
 func openWith(t *testing.T, sections string, formats FormatsFunc) (*App, string, error) {
 	t.Helper()
-	dir := t.TempDir()
+	return openFormatsIn(t, t.TempDir(), sections, formats)
+}
+
+// openIn is openWith for the deb format in dir.
+func openIn(t *testing.T, dir, sections string) (*App, string, error) {
+	t.Helper()
+	return openFormatsIn(t, dir, sections, debOnly)
+}
+
+func openFormatsIn(t *testing.T, dir, sections string, formats FormatsFunc) (*App, string, error) {
+	t.Helper()
 	cfgPath := filepath.Join(dir, "garner.yaml")
-	yaml := fmt.Sprintf("server:\n  public_url: http://localhost\ndatabase:\n  url: sqlite://%s/garner.db\n"+
+	yaml := fmt.Sprintf("server:\n  public_url: http://localhost\n  listen: 127.0.0.1:0\ndatabase:\n  url: sqlite://%s/garner.db\n"+
 		"storage:\n  path: %s\n%s", dir, dir, sections)
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
 		t.Fatal(err)

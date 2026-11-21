@@ -420,6 +420,12 @@ func (a *App) Server() *server.Server {
 func (a *App) Run(ctx context.Context, background ...func(context.Context)) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Before READY=1: systemd sends a reload queued during startup as soon
+	// as garner is ready, and an unhandled SIGHUP terminates the process.
+	// The loop below handles it once startup is done.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
 	cfg := a.Config()
 
 	// The first start publishes before serving, so the repository and its
@@ -495,9 +501,6 @@ func (a *App) Run(ctx context.Context, background ...func(context.Context)) erro
 		run(fn)
 	}
 
-	hup := make(chan os.Signal, 1)
-	signal.Notify(hup, syscall.SIGHUP)
-	defer signal.Stop(hup)
 	var err error
 loop:
 	for {
