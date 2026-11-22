@@ -97,17 +97,7 @@ release:
   draft: false
   prerelease: auto
 
-# Release notes: commits since the previous tag in git order, grouped by
-# their Conventional Commits type.
-changelog:
-  use: git
-  abbrev: 7
-  groups:
-    - title: Features
-      regexp: '^.*?feat(\(.+\))??!?:.+$'
-      order: 0
-    - title: Fixes
-      regexp: '^.*?fix(\(.+\))??!?:.+$'
-      order: 1
-    - title: Other changes
-      order: 2
+# Release notes are written by hand in docs/releases/<tag>.md. The release
+# workflow passes them with --release-notes, which takes the place of a
+# changelog from commits. changelog.disable would drop them as well: the
+# changelog pipe is what loads the file.

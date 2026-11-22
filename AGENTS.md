@@ -42,6 +42,17 @@ A change to configuration keys updates, together:
 A change to commands or flags updates `docs/garner.1`. When a slice lands
 or an item gets verified, update `docs/plan.md`.
 
+## Releases
+
+A tag releases only with notes in `docs/releases/<tag>.md`, committed
+before the tag; the release workflow publishes that file as the GitHub
+release's notes. Write them for the people who run garner: what changed
+for them since the previous release (features, behaviour and breaking
+changes, in a line each), in prose and short lists, not a list of
+commits. Draft them from `git log <previous tag>..` and `docs/plan.md`.
+Keep each paragraph on one line: GitHub shows line breaks in release
+notes as they are. `docs/releases/v0.1.0.md` shows the tone.
+
 ## Dependencies
 
 Ask before adding a Go module. The project prefers a local implementation
