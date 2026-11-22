@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -174,6 +175,7 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 	}
 	data := body[nindex*16:]
 	tags := tagValues{}
+	shapes := map[int32][2]uint32{} // type and count
 	for i := uint32(0); i < nindex; i++ {
 		e := body[i*16 : i*16+16]
 		tag := int32(binary.BigEndian.Uint32(e[0:4]))
@@ -185,14 +187,10 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 		default:
 			continue
 		}
-		// rpm finds a tag by binary search, so with two copies it may read
-		// a different one than garner would.
-		if _, dup := tags[tag]; dup {
-			return 0, nil, fmt.Errorf("tag %d: duplicate entry", tag)
-		}
 		if uint64(off) >= uint64(len(data)) {
 			return 0, nil, fmt.Errorf("tag %d: offset out of range", tag)
 		}
+		var v any
 		switch {
 		case tag == tagObsoletes && typ == typeStringArray:
 			// count strings, each NUL-terminated; each takes a byte at least.
@@ -211,7 +209,7 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 				names = append(names, string(rest[:end]))
 				rest = rest[end+1:]
 			}
-			tags[tag] = names
+			v = names
 		case tag == tagObsoletes:
 			return 0, nil, fmt.Errorf("tag %d: type %d, want a string array", tag, typ)
 		case tag == tagEpoch:
@@ -221,7 +219,7 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 			if uint64(off)+4 > uint64(len(data)) {
 				return 0, nil, fmt.Errorf("tag %d: bad int32", tag)
 			}
-			tags[tag] = int32(binary.BigEndian.Uint32(data[off : off+4]))
+			v = int32(binary.BigEndian.Uint32(data[off : off+4]))
 		// Only the summary may be an I18N string: rpm picks one of its
 		// values by locale, and garner reads the first.
 		case typ == typeString, tag == tagSummary && typ == typeI18NString:
@@ -229,10 +227,20 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 			if end < 0 {
 				return 0, nil, fmt.Errorf("tag %d: unterminated string", tag)
 			}
-			tags[tag] = string(data[off : off+uint32(end)])
+			v = string(data[off : off+uint32(end)])
 		default:
 			return 0, nil, fmt.Errorf("tag %d: type %d, want a string", tag, typ)
 		}
+		// rpm finds a tag by binary search, so of two copies it may read
+		// another one than garner. Identical copies cannot disagree; some
+		// AlmaLinux 10 builds repeat SOURCERPM this way.
+		if prev, dup := tags[tag]; dup {
+			if shapes[tag] != [2]uint32{typ, count} || !reflect.DeepEqual(prev, v) {
+				return 0, nil, fmt.Errorf("tag %d: duplicate entry with a different value", tag)
+			}
+			continue
+		}
+		tags[tag], shapes[tag] = v, [2]uint32{typ, count}
 	}
 	return total, tags, nil
 }

@@ -134,6 +134,33 @@ func TestReadHeaderDuplicateTag(t *testing.T) {
 	}
 }
 
+// Identical copies of a tag cannot disagree, so they are accepted: some
+// AlmaLinux 10 builds repeat SOURCERPM.
+func TestReadHeaderIdenticalDuplicateTag(t *testing.T) {
+	entries := []fakeEntry{
+		{tagName, typeString, "libusb1"},
+		{tagVersion, typeString, "1.0.30"},
+		{tagRelease, typeString, "1.el10_2"},
+		{tagEpoch, typeInt32, "0"},
+		{tagEpoch, typeInt32, "0"},
+		{tagArch, typeString, "x86_64"},
+		{tagSourceRPM, typeString, "libusb1-1.0.30-1.el10_2.src.rpm"},
+		{tagSourceRPM, typeString, "libusb1-1.0.30-1.el10_2.src.rpm"},
+	}
+	p, err := ReadHeader(bytes.NewReader(fakeRPMEntries(entries)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.SourceRPM != "libusb1-1.0.30-1.el10_2.src.rpm" {
+		t.Errorf("SourceRPM = %q", p.SourceRPM)
+	}
+
+	entries[4].value = "1"
+	if _, err := ReadHeader(bytes.NewReader(fakeRPMEntries(entries))); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("epoch copies 0 and 1: err = %v, want a duplicate tag error", err)
+	}
+}
+
 // The tags that identify a package must have the type rpmbuild writes:
 // rpm picks an I18N string by locale, so garner could read another value.
 func TestReadHeaderTagTypes(t *testing.T) {
