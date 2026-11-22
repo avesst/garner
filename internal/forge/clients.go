@@ -26,6 +26,14 @@ func olderThan(rs []Release, since time.Time) bool {
 	return false
 }
 
+// later returns the later of two times; a zero time counts as unknown.
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
 // --- GitHub and GitHub Enterprise Server ---
 
 type github struct{ *httpClient }
@@ -73,10 +81,12 @@ type ghRelease struct {
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []struct {
-		Name   string `json:"name"`
-		URL    string `json:"url"`
-		Size   int64  `json:"size"`
-		Digest string `json:"digest"`
+		Name      string    `json:"name"`
+		URL       string    `json:"url"`
+		Size      int64     `json:"size"`
+		Digest    string    `json:"digest"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
 	} `json:"assets"`
 }
 
@@ -86,18 +96,33 @@ func (g *github) Releases(ctx context.Context, repo string, since time.Time, eta
 		etag, releasePages, func(page []ghRelease) bool {
 			conv := make([]Release, len(page))
 			for i, r := range page {
-				rel := Release{ID: strconv.FormatInt(r.ID, 10), Tag: r.TagName, Draft: r.Draft,
-					Prerelease: r.Prerelease, PublishedAt: r.PublishedAt}
-				for _, a := range r.Assets {
-					rel.Assets = append(rel.Assets, Asset{Name: a.Name, URL: a.URL, Size: a.Size,
-						SHA256: strings.TrimPrefix(a.Digest, "sha256:")})
-				}
-				conv[i] = rel
+				conv[i] = r.release()
 			}
 			out = append(out, conv...)
 			return olderThan(conv, since)
 		})
 	return out, tag, err
+}
+
+func (g *github) Release(ctx context.Context, repo, id string) (Release, bool, error) {
+	var r ghRelease
+	found, err := g.getOne(ctx, g.api("/repos/"+repo+"/releases/"+url.PathEscape(id), nil), &r)
+	if !found {
+		return Release{}, false, err
+	}
+	return r.release(), true, nil
+}
+
+func (r ghRelease) release() Release {
+	rel := Release{ID: strconv.FormatInt(r.ID, 10), Tag: r.TagName, Draft: r.Draft,
+		Prerelease: r.Prerelease, PublishedAt: r.PublishedAt, AssetTimes: true}
+	for _, a := range r.Assets {
+		// updated_at moves on a rename, which can turn an old file into a
+		// candidate.
+		rel.Assets = append(rel.Assets, Asset{Name: a.Name, URL: a.URL, Size: a.Size,
+			SHA256: strings.TrimPrefix(a.Digest, "sha256:"), CreatedAt: later(a.CreatedAt, a.UpdatedAt)})
+	}
+	return rel
 }
 
 // Download uses the API asset URL with Accept: application/octet-stream,
@@ -140,9 +165,10 @@ type fjRelease struct {
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []struct {
-		Name string `json:"name"`
-		Size int64  `json:"size"`
-		URL  string `json:"browser_download_url"`
+		Name      string    `json:"name"`
+		Size      int64     `json:"size"`
+		URL       string    `json:"browser_download_url"`
+		CreatedAt time.Time `json:"created_at"`
 	} `json:"assets"`
 }
 
@@ -152,17 +178,30 @@ func (f *forgejo) Releases(ctx context.Context, repo string, since time.Time, et
 		etag, releasePages, func(page []fjRelease) bool {
 			conv := make([]Release, len(page))
 			for i, r := range page {
-				rel := Release{ID: strconv.FormatInt(r.ID, 10), Tag: r.TagName, Draft: r.Draft,
-					Prerelease: r.Prerelease, PublishedAt: r.PublishedAt}
-				for _, a := range r.Assets {
-					rel.Assets = append(rel.Assets, Asset{Name: a.Name, URL: a.URL, Size: a.Size})
-				}
-				conv[i] = rel
+				conv[i] = r.release()
 			}
 			out = append(out, conv...)
 			return olderThan(conv, since)
 		})
 	return out, tag, err
+}
+
+func (f *forgejo) Release(ctx context.Context, repo, id string) (Release, bool, error) {
+	var r fjRelease
+	found, err := f.http.getOne(ctx, f.http.api("/repos/"+repo+"/releases/"+url.PathEscape(id), nil), &r)
+	if !found {
+		return Release{}, false, err
+	}
+	return r.release(), true, nil
+}
+
+func (r fjRelease) release() Release {
+	rel := Release{ID: strconv.FormatInt(r.ID, 10), Tag: r.TagName, Draft: r.Draft,
+		Prerelease: r.Prerelease, PublishedAt: r.PublishedAt, AssetTimes: true}
+	for _, a := range r.Assets {
+		rel.Assets = append(rel.Assets, Asset{Name: a.Name, URL: a.URL, Size: a.Size, CreatedAt: a.CreatedAt})
+	}
+	return rel
 }
 
 func (f *forgejo) Download(ctx context.Context, a Asset) (io.ReadCloser, error) {
@@ -199,6 +238,7 @@ func (g *gitlab) ListRepos(ctx context.Context, group string, recursive bool) ([
 
 type glRelease struct {
 	TagName         string    `json:"tag_name"`
+	CreatedAt       time.Time `json:"created_at"`
 	ReleasedAt      time.Time `json:"released_at"`
 	UpcomingRelease bool      `json:"upcoming_release"`
 	Assets          struct {
@@ -216,22 +256,54 @@ func (g *gitlab) Releases(ctx context.Context, repo string, since time.Time, eta
 		url.Values{"per_page": {"30"}}), etag, releasePages, func(page []glRelease) bool {
 		conv := make([]Release, len(page))
 		for i, r := range page {
-			// GitLab has no release ids or drafts; a tag names a release, and
-			// an upcoming release (released_at in the future) is not out yet.
-			rel := Release{ID: r.TagName, Tag: r.TagName, Draft: r.UpcomingRelease, PublishedAt: r.ReleasedAt}
-			for _, l := range r.Assets.Links {
-				u := l.DirectAssetURL
-				if u == "" {
-					u = l.URL
-				}
-				rel.Assets = append(rel.Assets, Asset{Name: l.Name, URL: u})
-			}
-			conv[i] = rel
+			conv[i] = r.release()
 		}
 		out = append(out, conv...)
 		return olderThan(conv, since)
 	})
 	return out, tag, err
+}
+
+// Release looks a release up by its tag, and finds it only if it is still
+// the one created at the time its ID records. A bare tag, the ID from
+// before IDs carried the creation time, finds the release under its
+// current ID.
+func (g *gitlab) Release(ctx context.Context, repo, id string) (Release, bool, error) {
+	tag, _, _ := strings.Cut(id, ":")
+	var r glRelease
+	found, err := g.http.getOne(ctx, g.http.api("/projects/"+escapeAll(repo)+"/releases/"+url.PathEscape(tag), nil), &r)
+	if !found {
+		return Release{}, false, err
+	}
+	rel := r.release()
+	if strings.Contains(id, ":") && rel.ID != id {
+		return Release{}, false, nil // deleted and re-created since
+	}
+	return rel, true, nil
+}
+
+// release converts a GitLab release. GitLab has no release ids or drafts.
+// A tag names a release, so the ID adds the creation time: a release
+// deleted and re-created under the same tag is a new release. Git refs
+// cannot contain ':', so the tag ends at the first one. An upcoming
+// release (released_at in the future) is not out yet. The caller may set
+// released_at to a past date (a historical release), so the server's
+// created_at bounds it: a backdated release must not skip
+// min_release_age. The listing stays in GitLab's released_at order, which
+// places an upcoming release where it comes out; a backdated one sorts far
+// back and may not be listed, which publishes nothing early. Links carry
+// no time.
+func (r glRelease) release() Release {
+	rel := Release{ID: r.TagName + ":" + r.CreatedAt.UTC().Format(time.RFC3339Nano), Tag: r.TagName,
+		Draft: r.UpcomingRelease, PublishedAt: later(r.CreatedAt, r.ReleasedAt), FormerID: r.TagName}
+	for _, l := range r.Assets.Links {
+		u := l.DirectAssetURL
+		if u == "" {
+			u = l.URL
+		}
+		rel.Assets = append(rel.Assets, Asset{Name: l.Name, URL: u})
+	}
+	return rel
 }
 
 func (g *gitlab) Download(ctx context.Context, a Asset) (io.ReadCloser, error) {

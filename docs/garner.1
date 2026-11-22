@@ -98,11 +98,35 @@ Show or change which owner may upload a package name.
 needs scope
 .BR admin .
 .TP
-.B sync \fISOURCE\fR
+.B sync \fISOURCE\fR [\fB\-\-ignore\-age\fR \fITAG\fR [\fB\-\-repo\fR \fIREPO\fR]]
 Start a sync of a configured source; follow it with
 .BR "garner status" .
 Scope:
 .BR publish .
+.IP
+.B \-\-ignore\-age
+lets the release
+.I TAG
+skip the source's
+.BR min_release_age ,
+for an urgent fix.
+It covers only a release and package assets uploaded before the command
+runs, so a release re-created under the same tag, or an asset uploaded
+later, waits again; run it once the assets are attached.
+.B \-\-repo
+names the repository; it is required for
+.B org
+and
+.B group
+sources and must be one the source's last sync listed.
+A tag that was already processed is refused, unless a release re-created
+under it is waiting, and so is a source without
+.BR min_release_age .
+The decision is logged and kept with the token's name.
+Needs scopes
+.B publish
+and
+.BR admin .
 .TP
 .B approve \fIPACKAGE_ID\fR
 Release a held package.

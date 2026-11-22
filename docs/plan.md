@@ -63,27 +63,76 @@ Caddy:
   a pinned snapshot URL, publish, GC, and sync from a public GitHub
   repository.
 
-## Next: minimum release age for sync (after 0.1.0)
+## Minimum release age for sync (after 0.1.0)
 
-Supply-chain protection: a synced release is published only once it is old
-enough, so a compromised release has time to be noticed and pulled first.
-Decided so far:
+Done; unit-tested against fake forges, not yet on a real host or in
+`just e2e`. Next check: a gated source on the test host against a real
+GitHub repository. Supply-chain protection: a synced release is published only
+once it is old enough, so a compromised release has time to be noticed and
+pulled first.
 
 - Key `min_release_age`, a duration, in `defaults` and per source; a source
   value overrides the default, and `0s` (the default) turns it off. Same
   precedence as `retention`, `verify` and `approval`.
-- Age is measured from the forge's `published_at`. Assets attached to an
-  already processed release are never picked up (section 7), so editing an
-  old release does not bypass it.
-- A release that is too young stays pending and is not marked processed;
-  later polls check it again, and newer releases are evaluated meanwhile.
-- A source's first run takes the latest release that is old enough, not
-  the latest release.
+- Age is measured from the forge's publish time, or from the newest
+  candidate asset's upload where the forge dates assets (GitHub: later of
+  `created_at` and `updated_at`; Forgejo: `created_at`). On GitLab the
+  publish time is the later of `created_at` and `released_at`, since
+  `released_at` can be backdated; the listing keeps GitLab's `released_at`
+  order, so upcoming releases are found, and a backdated release far back
+  may not be listed (nothing is published early). A
+  release without a publish time waits until an override.
+- A release that is too young is deferred: recorded as pending, so a newer
+  release processed meanwhile does not hide it, and the listing's ETag is
+  not stored, so later polls check it again.
+- A source's first run takes the latest release that is old enough; newer
+  ones follow as they age, so a new gated source can publish several
+  recent versions, where an ungated one takes only the newest.
+- The wait for late assets stays on where assets are dated: late assets
+  wait for their own age. On GitLab (undated links) an old-enough release
+  is processed as it is, except one let through by an override.
 - Uploads are not affected.
-- An explicit override for urgent fixes, for example
-  `garner sync <source> --ignore-age <tag>`, so skipping the wait is a
-  logged decision.
-- Deferred releases show in `garner status` and as a metric.
+- `garner sync <source> --ignore-age <tag> [--repo <repo>]` lets one
+  release through. It needs `publish` and `admin`, is logged, and is kept
+  in `release_age_overrides` with the token's name. It covers only a
+  release and dated assets uploaded before the override, so one
+  re-created under the same tag, or an asset uploaded later, waits again.
+  `--repo` must match the source's cached listing, ignoring case. A tag
+  already processed is refused with 409; an override for a release the
+  source never processes is logged as having no effect.
+- A pending release the listing does not hold is fetched by ID; one that
+  is gone (pulled) or became a draft is dropped with a warning, so polls
+  stop paging back to it. While any is pending the listing is fetched
+  without its ETag.
+- GitLab release IDs are the tag plus `created_at`, so a release
+  re-created under the same tag is new. Releases processed under the old
+  ID (the bare tag) still count as processed, and one pending under it is
+  kept pending under its new ID.
+- Open, GitLab only: a release processed before the ID change and later
+  re-created under its tag still counts as processed through its former
+  ID. Fix when needed: count a former-ID match only if that record's
+  `published_at` is not before the release's `created_at`.
+- Releases without package assets are not deferred, and a pending one
+  whose package assets were removed is dropped, so its repository's
+  listing can use its ETag again.
+- A failed lookup of a pending release holds up only that release.
+- An override on a source without `min_release_age` is refused (409).
+- Known limit, older than this slice: listings stop paging at the first
+  release published at or before `since`, but forges sort by creation.
+  A release created long before it is published (a draft kept for weeks)
+  can sit past that page and is never seen, gate or not. Pending releases
+  are not affected: they are fetched by ID.
+- Known limit: on Forgejo a rename does not move an asset's time, so an
+  old non-package file renamed to `.deb` on an unprocessed release counts
+  as old.
+- Deferred releases show in `garner status` and as
+  `garner_sync_releases_deferred{source}`.
+- Open, for multiple nodes (section 18): the exception that lets
+  `--ignore-age` through for a processed tag re-created upstream reads the
+  syncer's in-memory deferred list. It is empty after a restart until the
+  source's first poll (the 409 message says to run `garner sync` first)
+  and is not shared between nodes. Fix with the multi-node work: a `tag`
+  column in `pending_releases`, and the decision made from the database.
 
 ## Decisions to make when their slice arrives
 

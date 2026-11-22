@@ -27,7 +27,7 @@ API commands (--url or GARNER_URL; GARNER_TOKEN=name:secret):
   upload [--suite S] [--release R] FILES...
   remove NAME [--version V] [--arch A] [--distribution D]
   owner list | owner set NAME OWNER
-  sync SOURCE
+  sync SOURCE [--ignore-age TAG [--repo REPO]]
   approve PACKAGE_ID
   conflicts list [--all]
   packages list [--name N] [--distribution D] [--all]

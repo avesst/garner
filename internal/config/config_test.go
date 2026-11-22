@@ -120,6 +120,8 @@ func TestInvalid(t *testing.T) {
 		{"arch all", serverOnly + "deb:\n  architectures: [amd64, all]\n", []string{`"all" is implicit`}},
 		{"duplicate suite", serverOnly + "deb:\n  suites: [stable, stable]\n", []string{"listed twice"}},
 		{"bad enum", minimal + "defaults:\n  verify: sometimes\n", []string{"defaults.verify"}},
+		{"negative min_release_age", minimal + "defaults:\n  min_release_age: -1h\n", []string{"defaults.min_release_age: must not be negative"}},
+		{"min_release_age in days", minimal + "defaults:\n  min_release_age: 14d\n", []string{"14d"}},
 		{"forge without url", minimal + "forges:\n  - {name: f, type: forgejo}\n", []string{"url: is required"}},
 		{"forge over http", minimal + "forges:\n  - {name: f, type: forgejo, url: \"http://git\"}\n", []string{"https URL"}},
 		{"two tokens", minimal + "forges:\n  - {name: gh, type: github, token_env: A, token_file: /b}\n", []string{"not both"}},
@@ -228,5 +230,28 @@ func TestHolderKeepsConfigOnInvalidReload(t *testing.T) {
 	}
 	if h.Current().Log.Level != "debug" || h.Current().Hash == first.Hash {
 		t.Error("valid reload not applied")
+	}
+}
+
+func TestMinReleaseAgePrecedence(t *testing.T) {
+	cfg, err := Parse([]byte(minimal + `defaults:
+  min_release_age: 72h
+forges:
+  - {name: gh, type: github}
+sources:
+  - {name: a, forge: gh, repo: o/a}
+  - {name: b, forge: gh, repo: o/b, min_release_age: 0s}
+  - {name: c, forge: gh, repo: o/c, min_release_age: 336h}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []time.Duration{72 * time.Hour, 0, 336 * time.Hour} {
+		if got := cfg.Settings(cfg.Sources[i]).MinReleaseAge; got != want {
+			t.Errorf("source %s: min_release_age = %s, want %s", cfg.Sources[i].Name, got, want)
+		}
+	}
+	if d := Default().Defaults.MinReleaseAge; d != 0 {
+		t.Errorf("default min_release_age = %s, want 0s", d)
 	}
 }

@@ -131,6 +131,7 @@ applies to uploaded packages.
 | `verify` | `opportunistic` or `required` | `opportunistic` | Checksum policy. An asset is checked against the forge's digest or the release's checksum file when one exists, and a mismatch always rejects it. `opportunistic` accepts assets without a checksum and marks them unverified. `required` rejects them. |
 | `approval` | `auto` or `manual` | `auto` | With `manual`, new packages are stored as held and published only after `garner approve`. |
 | `prereleases` | bool | `false` | Sync pre-releases too. Drafts are never synced. |
+| `min_release_age` | duration | `0s` | How old a synced release and its assets must be before garner processes it, so a compromised release has time to be noticed and pulled first. `0s` turns the wait off. Must not be negative. See [Minimum release age](#minimum-release-age). |
 
 ## `forges`
 
@@ -175,16 +176,17 @@ GitLab group (`group`). Set exactly one of the three.
 | `forks` | bool | `false` | Also sync forks in an `org` or `group`. |
 | `recursive` | bool | `true` | Walk GitLab subgroups. Only valid on GitLab `group` sources. |
 
-A source can also set `retention`, `poll_interval`, `verify`, `approval` and
-`prereleases`, which override [`defaults`](#defaults) for that source only.
-The same rules apply.
+A source can also set `retention`, `poll_interval`, `verify`, `approval`,
+`prereleases` and `min_release_age`, which override [`defaults`](#defaults)
+for that source only. The same rules apply.
 
 Some asset names are always skipped: `*.src.rpm`, `*-dbgsym*` and
 `*-debuginfo*`, and files without the extension of an enabled format
 (`.deb`, `.rpm`).
 
-On its first run, a source syncs only the latest release of each repository.
-Later runs pick up every release published since then.
+On its first run, a source syncs only the latest release of each repository
+(with `min_release_age`, the latest that is old enough). Later runs pick up
+every release published since then.
 
 ### Asset rules
 
@@ -206,6 +208,51 @@ format wins, so a `*` rule with only `suite` does not catch rpm assets.
 - If two assets of one release end up as the same package, version,
   architecture and distribution, both are skipped and a conflict is
   recorded.
+
+### Minimum release age
+
+With `min_release_age` set, a release is processed only once it is that old.
+The age runs from the release's publish time or, on GitHub and Forgejo,
+from the upload of its newest package asset if that is later. On GitLab,
+a release backdated with a past `released_at` is measured from when it was
+created. For two weeks, write `336h`.
+
+- A younger release is deferred. Later polls check it again, and
+  `garner status` lists it with the time it becomes eligible. It is logged
+  once, as `deferring release`, when first deferred; each run's
+  `sync finished` line counts deferred releases, and so does the metric
+  `garner_sync_releases_deferred`, per source.
+- On its first run, a source takes the latest release that is old enough;
+  newer releases follow as each one ages. A new source can therefore
+  publish several recent versions over its first days; `retention` trims
+  them.
+- A release whose assets are attached after publishing waits for them, as
+  without the gate, and then for their age. On GitLab, whose release links
+  carry no time, an old-enough release is processed as it is: links added
+  later are not picked up, so a pipeline must attach them within
+  `min_release_age`.
+- A release without a publish time waits until it is let through by hand.
+- Uploads are not affected.
+
+For an urgent fix, let one release through:
+
+```sh
+garner sync tool --ignore-age v1.2.4
+garner sync team --ignore-age v1.2.4 --repo team/tool   # org or group source
+```
+
+This needs a token with both the `publish` and `admin` scopes, and a source
+with `min_release_age` set. It covers
+only a release, and package assets, uploaded before the command runs: a
+release deleted and re-created under the same tag, or an asset uploaded
+afterwards, waits again. Run it once the release's assets are attached.
+For an org or group source, `--repo` must name a repository the source's
+last sync listed. A tag that was already processed is refused, unless a
+release under it is waiting (re-created upstream): assets attached to a
+processed release are never picked up, so publish a new release. garner
+logs a warning when an override has no effect: the release is older than
+where the source starts, or it or an asset changed after the override. The decision is logged and
+kept in the database with the token's name.
 
 ## Changes that need a restart
 

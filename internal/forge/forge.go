@@ -37,6 +37,13 @@ type Release struct {
 	Prerelease  bool
 	PublishedAt time.Time
 	Assets      []Asset
+	// AssetTimes reports whether the forge dates each asset (CreatedAt),
+	// so min_release_age can also apply to assets attached later.
+	AssetTimes bool
+	// FormerID is the ID an older garner gave this release, when the
+	// client has since changed how it names releases; records made under
+	// it still count.
+	FormerID string
 }
 
 // Asset is a downloadable release file.
@@ -46,10 +53,16 @@ type Asset struct {
 	Size int64
 	// SHA256 is the forge-provided digest, lowercase hex, or "".
 	SHA256 string
+	// CreatedAt is when the asset was uploaded, or last changed where the
+	// forge reports that; zero when unknown.
+	CreatedAt time.Time
 }
 
 // ErrNotModified is returned when an ETag matched.
 var ErrNotModified = errors.New("not modified")
+
+// errNotFound marks an API request answered with 404.
+var errNotFound = errors.New("not found")
 
 // Client is one configured forge.
 type Client interface {
@@ -62,6 +75,10 @@ type Client interface {
 	// enough pages to reach releases published at or before since. The
 	// first page uses etag; ErrNotModified means nothing changed.
 	Releases(ctx context.Context, repo string, since time.Time, etag string) ([]Release, string, error)
+	// Release returns one release by the ID Releases gave it; found is
+	// false when the forge no longer has it. The release may come back
+	// under a newer form of its ID.
+	Release(ctx context.Context, repo, id string) (rel Release, found bool, err error)
 	// Download opens an asset. Credentials are sent only to the forge's
 	// own host.
 	Download(ctx context.Context, a Asset) (io.ReadCloser, error)
@@ -297,7 +314,11 @@ func (h *httpClient) getJSON(ctx context.Context, u, etag string, out any) (stri
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", "", fmt.Errorf("GET %s: HTTP %d: %s", redact(u), resp.StatusCode, strings.TrimSpace(string(body)))
+		err := fmt.Errorf("GET %s: HTTP %d: %s", redact(u), resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode == http.StatusNotFound {
+			err = fmt.Errorf("%w (%w)", err, errNotFound)
+		}
+		return "", "", err
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out); err != nil {
 		return "", "", fmt.Errorf("GET %s: %w", redact(u), err)
@@ -312,6 +333,15 @@ func nextLink(h string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// getOne fetches a single API object into out; found is false on 404.
+func (h *httpClient) getOne(ctx context.Context, u string, out any) (bool, error) {
+	_, _, err := h.getJSON(ctx, u, "", out)
+	if errors.Is(err, errNotFound) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // redact drops the query, which some forges accept tokens in.

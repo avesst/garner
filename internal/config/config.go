@@ -97,6 +97,9 @@ type Defaults struct {
 	Verify       string        `yaml:"verify"`
 	Approval     string        `yaml:"approval"`
 	Prereleases  bool          `yaml:"prereleases"`
+	// MinReleaseAge is how old a synced release must be before it is
+	// processed; 0 turns the wait off.
+	MinReleaseAge time.Duration `yaml:"min_release_age"`
 }
 
 type Forge struct {
@@ -131,11 +134,12 @@ type Source struct {
 	Recursive *bool `yaml:"recursive"`
 
 	// Overrides of Defaults; nil means "use the default".
-	PollInterval *time.Duration `yaml:"poll_interval"`
-	Retention    *int           `yaml:"retention"`
-	Verify       *string        `yaml:"verify"`
-	Approval     *string        `yaml:"approval"`
-	Prereleases  *bool          `yaml:"prereleases"`
+	PollInterval  *time.Duration `yaml:"poll_interval"`
+	Retention     *int           `yaml:"retention"`
+	Verify        *string        `yaml:"verify"`
+	Approval      *string        `yaml:"approval"`
+	Prereleases   *bool          `yaml:"prereleases"`
+	MinReleaseAge *time.Duration `yaml:"min_release_age"`
 }
 
 // AssetRule maps release assets matching Match to a deb suite and/or an rpm
@@ -148,24 +152,26 @@ type AssetRule struct {
 
 // Settings are a source's effective per-source values.
 type Settings struct {
-	PollInterval time.Duration
-	Retention    int
-	Verify       string
-	Approval     string
-	Prereleases  bool
-	Recursive    bool
+	PollInterval  time.Duration
+	Retention     int
+	Verify        string
+	Approval      string
+	Prereleases   bool
+	Recursive     bool
+	MinReleaseAge time.Duration
 }
 
 // Settings resolves s's overrides against the configuration's defaults.
 func (c *Config) Settings(s Source) Settings {
 	d := c.Defaults
 	out := Settings{
-		PollInterval: d.PollInterval,
-		Retention:    d.Retention,
-		Verify:       d.Verify,
-		Approval:     d.Approval,
-		Prereleases:  d.Prereleases,
-		Recursive:    true,
+		PollInterval:  d.PollInterval,
+		Retention:     d.Retention,
+		Verify:        d.Verify,
+		Approval:      d.Approval,
+		Prereleases:   d.Prereleases,
+		Recursive:     true,
+		MinReleaseAge: d.MinReleaseAge,
 	}
 	if s.PollInterval != nil {
 		out.PollInterval = *s.PollInterval
@@ -184,6 +190,9 @@ func (c *Config) Settings(s Source) Settings {
 	}
 	if s.Recursive != nil {
 		out.Recursive = *s.Recursive
+	}
+	if s.MinReleaseAge != nil {
+		out.MinReleaseAge = *s.MinReleaseAge
 	}
 	return out
 }

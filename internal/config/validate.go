@@ -57,8 +57,9 @@ func (c *Config) Validate() error {
 		validateList(&p, "rpm.architectures", c.RPM.Architectures, reRPMArch, "noarch")
 		validateList(&p, "rpm.releases", c.RPM.Releases, reDistribution, "")
 	}
-	validateSettings(&p, "defaults", c.Defaults.Retention, c.Defaults.PollInterval,
-		c.Defaults.Verify, c.Defaults.Approval)
+	validateSettings(&p, "defaults", Settings{Retention: c.Defaults.Retention,
+		PollInterval: c.Defaults.PollInterval, Verify: c.Defaults.Verify,
+		Approval: c.Defaults.Approval, MinReleaseAge: c.Defaults.MinReleaseAge})
 	forges := c.validateForges(&p)
 	c.validateSources(&p, forges)
 	if len(p) > 0 {
@@ -192,18 +193,21 @@ func validateList(p *problems, path string, items []string, re *regexp.Regexp, f
 	}
 }
 
-func validateSettings(p *problems, path string, retention int, poll time.Duration, verify, approval string) {
-	if retention < 1 {
-		p.add(path+".retention", "must be at least 1, got %d", retention)
+func validateSettings(p *problems, path string, st Settings) {
+	if st.Retention < 1 {
+		p.add(path+".retention", "must be at least 1, got %d", st.Retention)
 	}
-	if poll < time.Minute {
-		p.add(path+".poll_interval", "must be at least 1m, got %s", poll)
+	if st.PollInterval < time.Minute {
+		p.add(path+".poll_interval", "must be at least 1m, got %s", st.PollInterval)
 	}
-	if verify != "opportunistic" && verify != "required" {
-		p.add(path+".verify", "must be opportunistic or required, got %q", verify)
+	if st.Verify != "opportunistic" && st.Verify != "required" {
+		p.add(path+".verify", "must be opportunistic or required, got %q", st.Verify)
 	}
-	if approval != "auto" && approval != "manual" {
-		p.add(path+".approval", "must be auto or manual, got %q", approval)
+	if st.Approval != "auto" && st.Approval != "manual" {
+		p.add(path+".approval", "must be auto or manual, got %q", st.Approval)
+	}
+	if st.MinReleaseAge < 0 {
+		p.add(path+".min_release_age", "must not be negative, got %s", st.MinReleaseAge)
 	}
 }
 
@@ -275,8 +279,7 @@ func (c *Config) validateSources(p *problems, forges map[string]string) {
 		validateGlobs(p, sp+".checksums", s.Checksums)
 		c.validateAssets(p, sp, s.Assets)
 
-		st := c.Settings(s)
-		validateSettings(p, sp, st.Retention, st.PollInterval, st.Verify, st.Approval)
+		validateSettings(p, sp, c.Settings(s))
 	}
 	c.validateOwnership(p)
 }

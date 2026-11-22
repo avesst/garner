@@ -333,6 +333,30 @@ new packages are stored as held and published only after
 .BR prereleases " (\fIbool\fR, default " false )
 Sync pre\-releases too.
 Drafts are never synced.
+.TP
+.BR min_release_age " (\fIduration\fR, default " 0s )
+How old a synced release must be before garner processes it, so a
+compromised release has time to be noticed and pulled first.
+The age runs from the release's publish time or, on GitHub and Forgejo,
+from the upload of its newest package asset if that is later.
+On GitLab it runs from the later of the release's creation and its
+.BR released_at .
+.B 0s
+turns the wait off.
+Must not be negative.
+A younger release is deferred: later polls check it again, and
+.B garner status
+lists it.
+A source's first run takes the latest release that is old enough; newer
+releases follow as each one ages, so a new source can publish several
+recent versions over its first days.
+Assets attached after publishing are waited for, then wait for their own
+age; on GitLab, whose links carry no time, an old-enough release is
+processed as it is and links added later are not picked up.
+A release without a publish time waits until
+.B garner sync \-\-ignore\-age
+lets it through.
+Uploads are not affected.
 .SH FORGES
 A list of forges that sources sync from.
 There are none by default.
@@ -491,9 +515,10 @@ A source can also set
 .BR retention ,
 .BR poll_interval ,
 .BR verify ,
-.B approval
+.BR approval ,
+.B prereleases
 and
-.BR prereleases ,
+.BR min_release_age ,
 which override
 .B defaults
 for that source only.

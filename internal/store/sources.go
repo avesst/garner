@@ -112,6 +112,21 @@ func (q *Queries) MarkPending(ctx context.Context, source, repo, releaseID strin
 	return err
 }
 
+// DropPending forgets a pending release, for one that is no longer listed.
+func (q *Queries) DropPending(ctx context.Context, source, repo, releaseID string) error {
+	_, err := q.q.ExecContext(ctx, `DELETE FROM pending_releases WHERE source = ? AND repo = ? AND release_id = ?`,
+		source, repo, releaseID)
+	return err
+}
+
+// SeenTag reports whether a release with this tag was processed.
+func (q *Queries) SeenTag(ctx context.Context, source, repo, tag string) (bool, error) {
+	var n int
+	err := q.q.QueryRowContext(ctx, `SELECT count(*) FROM seen_releases
+		WHERE source = ? AND repo = ? AND tag = ?`, source, repo, tag).Scan(&n)
+	return n > 0, err
+}
+
 // PendingReleases returns the IDs of a repository's pending releases and
 // the earliest publish time among them (zero when none has one).
 func (q *Queries) PendingReleases(ctx context.Context, source, repo string) (map[string]bool, time.Time, error) {
@@ -141,6 +156,50 @@ func (q *Queries) PendingReleases(ctx context.Context, source, repo string) (map
 		}
 	}
 	return ids, oldest, rows.Err()
+}
+
+// AddAgeOverride records that a release may skip min_release_age. Repeating
+// it for the same tag moves its time forward and records the new caller.
+func (q *Queries) AddAgeOverride(ctx context.Context, source, repo, tag, by string, at time.Time) error {
+	_, err := q.q.ExecContext(ctx, `INSERT INTO release_age_overrides (source, repo, tag, created_at, created_by)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (source, repo, tag) DO UPDATE SET created_at = excluded.created_at, created_by = excluded.created_by`,
+		source, repo, tag, FormatTime(at), by)
+	return err
+}
+
+// AgeOverride returns when a release was allowed to skip min_release_age;
+// ok is false when it was not.
+func (q *Queries) AgeOverride(ctx context.Context, source, repo, tag string) (t time.Time, ok bool, err error) {
+	var at string
+	err = q.q.QueryRowContext(ctx, `SELECT created_at FROM release_age_overrides
+		WHERE source = ? AND repo = ? AND tag = ?`, source, repo, tag).Scan(&at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	t, err = ParseTime(at)
+	return t, err == nil, err
+}
+
+// SourceRepos returns the cached repository listing of a source, sorted.
+func (q *Queries) SourceRepos(ctx context.Context, source string) ([]string, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT repo FROM source_repos WHERE source = ? ORDER BY repo`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // SaveRepos replaces the cached repository listing of a source.

@@ -1,14 +1,18 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/avesst/garner/internal/auth"
+	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/ingest"
 	"github.com/avesst/garner/internal/store"
@@ -353,16 +357,153 @@ func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, o)
 }
 
+// SyncRequest is the optional body of POST /api/v1/sources/{name}/sync.
+type SyncRequest struct {
+	IgnoreAge *IgnoreAgeRequest `json:"ignore_age,omitempty"`
+}
+
+// IgnoreAgeRequest lets one release skip min_release_age. Repo may be left
+// out for a single-repository source.
+type IgnoreAgeRequest struct {
+	Tag  string `json:"tag"`
+	Repo string `json:"repo,omitempty"`
+}
+
 func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 	if s.Syncer == nil {
 		writeError(w, http.StatusNotFound, "no sources configured")
 		return
 	}
-	if err := s.Syncer.Trigger(r.PathValue("name")); err != nil {
+	var req SyncRequest
+	// Strict, so a misspelled key is an error rather than a plain sync
+	// that silently records no override.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+	err := dec.Decode(&req)
+	if err == nil {
+		if extra := dec.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
+			err = errors.New("trailing data after the JSON object")
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, `body must be empty or {"ignore_age": {"tag": "...", "repo": "..."}}: `+err.Error())
+		return
+	}
+	name := r.PathValue("name")
+	if ia := req.IgnoreAge; ia != nil {
+		s.ignoreAge(w, r, name, ia)
+		return
+	}
+	if err := s.Syncer.Trigger(name); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "sync started"})
+}
+
+// overrideRepo resolves the repository an override names to its spelling
+// in the source, since forges match names without regard to case and the
+// override is looked up exactly. An org or group source must name one of
+// the repositories its last listing found. msg explains a rejected name.
+func (s *Server) overrideRepo(ctx context.Context, src config.Source, repo string) (string, string, error) {
+	if src.Repo != "" {
+		if repo != "" && !strings.EqualFold(repo, src.Repo) {
+			return "", fmt.Sprintf("source %s syncs only %s", src.Name, src.Repo), nil
+		}
+		return src.Repo, "", nil
+	}
+	if repo == "" {
+		return "", fmt.Sprintf("source %s has several repositories; name one with repo", src.Name), nil
+	}
+	known, err := s.Store.SourceRepos(ctx, src.Name)
+	if err != nil {
+		return "", "", err
+	}
+	for _, k := range known {
+		if strings.EqualFold(k, repo) {
+			return k, "", nil
+		}
+	}
+	if len(known) == 0 {
+		return "", fmt.Sprintf("source %s has not listed its repositories yet; run garner sync %s first", src.Name, src.Name), nil
+	}
+	return "", fmt.Sprintf("source %s has no repository %s", src.Name, repo), nil
+}
+
+// ignoreAge records an override of min_release_age and starts a sync.
+// Skipping the wait sets aside a supply-chain protection, so it needs the
+// admin scope on top of publish.
+func (s *Server) ignoreAge(w http.ResponseWriter, r *http.Request, name string, ia *IgnoreAgeRequest) {
+	tok := tokenFrom(r)
+	if !auth.HasScope(tok, auth.ScopeAdmin) {
+		writeError(w, http.StatusForbidden, "skipping min_release_age needs the "+auth.ScopeAdmin+" scope too")
+		return
+	}
+	sources := s.Config().Sources
+	idx := slices.IndexFunc(sources, func(c config.Source) bool { return c.Name == name })
+	if idx < 0 {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("no source named %q", name))
+		return
+	}
+	src := sources[idx]
+	if s.Config().Settings(src).MinReleaseAge == 0 {
+		writeError(w, http.StatusConflict, fmt.Sprintf("source %s has no min_release_age; its releases do not wait", name))
+		return
+	}
+	if ia.Tag == "" {
+		writeError(w, http.StatusBadRequest, "ignore_age needs a tag")
+		return
+	}
+	repo, msg, err := s.overrideRepo(r.Context(), src, ia.Repo)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	seen, err := s.Store.SeenTag(r.Context(), name, repo, ia.Tag)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	if seen && !s.deferred(r.Context(), name, repo, ia.Tag) {
+		writeError(w, http.StatusConflict, fmt.Sprintf(
+			"%s@%s was already processed; assets attached to it since are not picked up, so publish a new release. "+
+				"If it was deleted and re-created upstream, run garner sync %s first, so the new release is listed as waiting",
+			repo, ia.Tag, name))
+		return
+	}
+	if err := s.Syncer.IgnoreAge(r.Context(), name, repo, ia.Tag, tok.Name); err != nil {
+		s.internal(w, err)
+		return
+	}
+	status := "sync started"
+	if err := s.Syncer.Trigger(name); err != nil {
+		// The override is stored and applies on the source's next poll,
+		// for example once a reload has started its loop.
+		status = "override recorded; sync not started: " + err.Error()
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": status,
+		"ignore_age": repo + "@" + ia.Tag})
+}
+
+// deferred reports whether the syncer lists a release of repo under tag as
+// waiting for min_release_age: a processed tag deleted and re-created
+// upstream is a new release, and an override can still apply to it.
+func (s *Server) deferred(ctx context.Context, source, repo, tag string) bool {
+	for _, st := range s.Syncer.Status(ctx) {
+		if st.Name != source {
+			continue
+		}
+		for _, d := range st.Deferred {
+			if d.Repo == repo && d.Tag == tag {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) listConflicts(w http.ResponseWriter, r *http.Request) {

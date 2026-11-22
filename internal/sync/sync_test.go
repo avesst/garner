@@ -35,6 +35,13 @@ type fakeForge struct {
 	files    map[string][]byte // asset URL -> body
 	fail     map[string]bool   // asset URL -> download fails
 	etag     string            // when set, a request with it is not modified
+	// wholePage lists every release, as a real forge's first page also
+	// holds releases older than since.
+	wholePage bool
+	listFail  map[string]bool   // repo -> Releases fails
+	unlisted  map[string]bool   // release ID -> left out of listings, found by ID
+	renamed   map[string]string // old release ID -> the ID the release has now
+	lookFail  map[string]bool   // release ID -> lookup by ID fails
 
 	mu        gosync.Mutex
 	calls     map[string]int           // repo -> Releases calls
@@ -72,17 +79,40 @@ func (f *fakeForge) Releases(ctx context.Context, repo string, since time.Time, 
 			return nil, "", ctx.Err()
 		}
 	}
+	if f.listFail[repo] {
+		return nil, "", errors.New("HTTP 502")
+	}
 	if f.etag != "" && etag == f.etag {
 		return nil, "", forge.ErrNotModified
 	}
 	var out []forge.Release
 	for _, r := range f.releases[repo] {
-		if !r.PublishedAt.Before(since) {
+		// A real listing reaches only releases at or after since, but
+		// cannot place one without a publish time, so it keeps those.
+		if f.unlisted[r.ID] {
+			continue
+		}
+		if f.wholePage || r.PublishedAt.IsZero() || !r.PublishedAt.Before(since) {
 			out = append(out, r)
 		}
 	}
 	return out, f.etag, nil
 }
+func (f *fakeForge) Release(_ context.Context, repo, id string) (forge.Release, bool, error) {
+	if f.listFail[repo] || f.lookFail[id] {
+		return forge.Release{}, false, errors.New("HTTP 502")
+	}
+	if now, ok := f.renamed[id]; ok {
+		id = now
+	}
+	for _, r := range f.releases[repo] {
+		if r.ID == id {
+			return r, true, nil
+		}
+	}
+	return forge.Release{}, false, nil
+}
+
 func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, error) {
 	f.mu.Lock()
 	f.downloads = append(f.downloads, a.Name)

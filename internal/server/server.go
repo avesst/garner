@@ -30,6 +30,9 @@ type Syncer interface {
 	Trigger(name string) error
 	// Status returns per-source state for /api/v1/status.
 	Status(ctx context.Context) []SourceStatus
+	// IgnoreAge records that the release tag of repo in source may skip
+	// min_release_age; by names who decided it. It does not start a sync.
+	IgnoreAge(ctx context.Context, source, repo, tag, by string) error
 }
 
 // SourceStatus is one source's sync state.
@@ -42,6 +45,21 @@ type SourceStatus struct {
 	// Skipped lists assets of the last run whose distribution or
 	// architecture is not configured.
 	Skipped []string `json:"skipped_assets,omitempty"`
+	// Deferred lists releases the last run left for being younger than
+	// min_release_age.
+	Deferred []DeferredRelease `json:"deferred_releases,omitempty"`
+}
+
+// DeferredRelease is a release waiting for min_release_age.
+type DeferredRelease struct {
+	// ID is the forge's release ID, for garner's own bookkeeping.
+	ID          string `json:"-"`
+	Repo        string `json:"repo"`
+	Tag         string `json:"tag"`
+	PublishedAt string `json:"published_at,omitempty"`
+	// EligibleAt is when the release is old enough; empty when the forge
+	// gave no publish time, so only an override lets it through.
+	EligibleAt string `json:"eligible_at,omitempty"`
 }
 
 // Server serves everything on one handler.

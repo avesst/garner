@@ -121,6 +121,8 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	scope := fs.String("scope", "", "scopes (token create)")
 	all := fs.Bool("all", false, "include resolved or removed entries")
 	asJSON := fs.Bool("json", false, "print the raw JSON response")
+	ignoreAge := fs.String("ignore-age", "", "release tag that may skip min_release_age (sync)")
+	repo := fs.String("repo", "", "repository of --ignore-age, for org and group sources (sync)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return 2
@@ -231,13 +233,25 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 			return usageErr("owner list | owner set NAME OWNER")
 		}
 	case "sync":
-		if len(pos) != 1 {
-			return usageErr("sync SOURCE")
+		if len(pos) != 1 || (*repo != "" && *ignoreAge == "") {
+			return usageErr("sync SOURCE [--ignore-age TAG [--repo REPO]]")
 		}
-		if err := c.do(http.MethodPost, "/api/v1/sources/"+url.PathEscape(pos[0])+"/sync", nil, nil, nil); err != nil {
+		var body io.Reader
+		if *ignoreAge != "" {
+			body = jsonBody(server.SyncRequest{IgnoreAge: &server.IgnoreAgeRequest{Tag: *ignoreAge, Repo: *repo}})
+		}
+		var out map[string]string
+		if err := c.do(http.MethodPost, "/api/v1/sources/"+url.PathEscape(pos[0])+"/sync", nil, body, &out); err != nil {
 			return fail(err)
 		}
-		fmt.Fprintf(stdout, "sync of %s started; see garner status\n", pos[0])
+		if out["ignore_age"] != "" {
+			fmt.Fprintf(stdout, "%s may skip min_release_age; ", out["ignore_age"])
+		}
+		if out["status"] != "" && out["status"] != "sync started" {
+			fmt.Fprintf(stdout, "%s\n", out["status"])
+		} else {
+			fmt.Fprintf(stdout, "sync of %s started; see garner status\n", pos[0])
+		}
 	case "approve":
 		if len(pos) != 1 {
 			return usageErr("approve PACKAGE_ID")
@@ -350,6 +364,7 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.Name, dash(s.LastRun), dash(s.LastSuccess), dash(s.LastError))
 				}
 				tw.Flush()
+				printDeferred(stdout, st.Sources)
 			}
 		})
 	case "token":
@@ -381,6 +396,26 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// printDeferred lists releases waiting for min_release_age, if any.
+func printDeferred(w io.Writer, sources []server.SourceStatus) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	header := false
+	for _, s := range sources {
+		for _, d := range s.Deferred {
+			if !header {
+				fmt.Fprintln(tw, "\nDEFERRED\tRELEASE\tPUBLISHED\tELIGIBLE")
+				header = true
+			}
+			eligible := d.EligibleAt
+			if eligible == "" {
+				eligible = "only by --ignore-age (no publish time)"
+			}
+			fmt.Fprintf(tw, "%s\t%s@%s\t%s\t%s\n", s.Name, d.Repo, d.Tag, dash(d.PublishedAt), eligible)
+		}
+	}
+	tw.Flush()
 }
 
 func printPackages(w io.Writer, pkgs []server.PackageJSON) {

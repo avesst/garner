@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -46,6 +47,50 @@ func TestTokenNotSentInClear(t *testing.T) {
 		}
 		if !tc.wantAuth && (err == nil || !strings.Contains(err.Error(), "GARNER_INSECURE_AUTH")) {
 			t.Errorf("%s: err = %v, want a refusal naming GARNER_INSECURE_AUTH", tc.base, err)
+		}
+	}
+}
+
+func TestSyncIgnoreAgeAndDeferredStatus(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sources/org/sync":
+			b, _ := io.ReadAll(r.Body)
+			body = string(b)
+			io.WriteString(w, `{"status": "sync started", "ignore_age": "org/lib@v2"}`)
+		case "/api/v1/status":
+			io.WriteString(w, `{"sources": [{"name": "org", "deferred_releases": [
+				{"repo": "org/lib", "tag": "v3", "published_at": "2026-11-20T00:00:00.000000Z",
+				 "eligible_at": "2026-11-23T00:00:00.000000Z"},
+				{"repo": "org/app", "tag": "v1"}]}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var out, errOut strings.Builder
+	if code := runAPIWith(srv.URL, "sync", []string{"org", "--ignore-age", "v2", "--repo", "org/lib"}, &out, &errOut); code != 0 {
+		t.Fatalf("sync exit %d: %s", code, errOut.String())
+	}
+	if body != `{"ignore_age":{"tag":"v2","repo":"org/lib"}}` {
+		t.Errorf("request body = %s", body)
+	}
+	if !strings.Contains(out.String(), "org/lib@v2 may skip min_release_age") {
+		t.Errorf("output = %q", out.String())
+	}
+	if code := runAPIWith(srv.URL, "sync", []string{"org", "--repo", "org/lib"}, &out, &errOut); code != 2 {
+		t.Errorf("--repo without --ignore-age: exit %d, want 2", code)
+	}
+
+	out.Reset()
+	if code := runAPIWith(srv.URL, "status", nil, &out, &errOut); code != 0 {
+		t.Fatalf("status exit %d: %s", code, errOut.String())
+	}
+	for _, want := range []string{"org/lib@v3", "2026-11-23T00:00:00.000000Z", "org/app@v1", "only by --ignore-age"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("status output lacks %q:\n%s", want, out.String())
 		}
 	}
 }

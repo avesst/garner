@@ -44,6 +44,8 @@ type Manager struct {
 	// MaxStartDelay bounds the random delay before a new loop's first
 	// poll (default 30 s), so many sources do not poll at once.
 	MaxStartDelay time.Duration
+	// Now is the clock for min_release_age; tests replace it.
+	Now func() time.Time
 
 	mu       gosync.Mutex
 	base     context.Context // from Start; loops derive from it
@@ -51,8 +53,16 @@ type Manager struct {
 	running  map[string]bool
 	repoInfo map[string][]string // source -> repos without matching assets
 	skipped  map[string][]string // source -> assets skipped in the last run
-	clients  map[string]forge.Client
-	wg       gosync.WaitGroup
+	deferred map[string][]server.DeferredRelease
+	// noEffect holds source/repo@tag of overrides already reported as
+	// having no effect, so the warning is logged once per process.
+	noEffect map[string]bool
+	// notCovering maps source/repo@tag to the time of the override last
+	// reported as not covering its release, so each override is reported
+	// once and the map holds one entry per release.
+	notCovering map[string]time.Time
+	clients     map[string]forge.Client
+	wg          gosync.WaitGroup
 
 	lastSuccess *metrics.Vec
 	errors      *metrics.Vec
@@ -80,8 +90,13 @@ func (m *Manager) RegisterMetrics(r *metrics.Registry) {
 	m.errors = r.Counter("garner_sync_errors_total", "Failed sync runs.", "source")
 	m.added = r.Counter("garner_sync_packages_added_total", "Packages added by sync.", "source")
 	r.Collect(func(emit func(string, string, map[string]string, float64)) {
+		sources := m.Config().Sources
 		m.mu.Lock()
 		defer m.mu.Unlock()
+		for _, s := range sources {
+			emit("garner_sync_releases_deferred", "Releases waiting for min_release_age.",
+				map[string]string{"source": s.Name}, float64(len(m.deferred[s.Name])))
+		}
 		for name, c := range m.clients {
 			if n := c.RateLimitRemaining(); n >= 0 {
 				emit("garner_forge_ratelimit_remaining", "Remaining API quota reported by the forge.",
@@ -100,6 +115,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.running = map[string]bool{}
 		m.repoInfo = map[string][]string{}
 		m.skipped = map[string][]string{}
+		m.deferred = map[string][]server.DeferredRelease{}
+		m.noEffect = map[string]bool{}
+		m.notCovering = map[string]time.Time{}
 	}
 	m.mu.Unlock()
 	return m.Restart()
@@ -207,11 +225,31 @@ func (m *Manager) Status(ctx context.Context) []server.SourceStatus {
 		m.mu.Lock()
 		info := slices.Clone(m.repoInfo[s.Name])
 		skipped := slices.Clone(m.skipped[s.Name])
+		deferred := slices.Clone(m.deferred[s.Name])
 		m.mu.Unlock()
 		out = append(out, server.SourceStatus{Name: s.Name, LastRun: st.LastRun,
-			LastSuccess: st.LastSuccess, LastError: st.LastError, Unmatched: info, Skipped: skipped})
+			LastSuccess: st.LastSuccess, LastError: st.LastError, Unmatched: info, Skipped: skipped,
+			Deferred: deferred})
 	}
 	return out
+}
+
+// IgnoreAge records that a release may skip min_release_age. The override
+// covers only a release published before now, so one re-created under the
+// same tag later waits again.
+func (m *Manager) IgnoreAge(ctx context.Context, source, repo, tag, by string) error {
+	if err := m.Store.AddAgeOverride(ctx, source, repo, tag, by, m.now()); err != nil {
+		return err
+	}
+	m.Log.Info("release may skip min_release_age", "source", source, "repo", repo, "tag", tag, "by", by)
+	return nil
+}
+
+func (m *Manager) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
 }
 
 func (m *Manager) loop(ctx context.Context, name string, trig chan struct{}) {
@@ -285,7 +323,14 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 		return true
 	}
 	st.LastRun = store.Now()
-	run := &run{m: m, src: src, cfg: m.Config(), client: client, state: st, log: log}
+	run := &run{m: m, src: src, cfg: m.Config(), client: client, state: st, log: log,
+		wasDeferred: map[string]bool{}, deferredRepos: map[string]bool{}}
+	m.mu.Lock()
+	run.prevDeferred = slices.Clone(m.deferred[src.Name])
+	m.mu.Unlock()
+	for _, d := range run.prevDeferred {
+		run.wasDeferred[d.Repo+"@"+d.Tag] = true
+	}
 	err = run.sync(ctx)
 	if errors.Is(err, context.Canceled) {
 		log.Info("sync cancelled; unfinished releases are retried next run")
@@ -303,7 +348,7 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 		if m.lastSuccess != nil {
 			m.lastSuccess.Set(float64(time.Now().Unix()), src.Name)
 		}
-		log.Info("sync finished", "added", run.added)
+		log.Info("sync finished", "added", run.added, "deferred", len(run.deferred))
 	}
 	if m.added != nil && run.added > 0 {
 		m.added.Add(float64(run.added), src.Name)
@@ -316,14 +361,22 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 
 // run is one sync of one source.
 type run struct {
-	m       *Manager
-	src     config.Source
-	cfg     *config.Config
-	client  forge.Client
-	state   *store.SourceState
-	log     *slog.Logger
-	added   int
-	skipped []string
+	m        *Manager
+	src      config.Source
+	cfg      *config.Config
+	client   forge.Client
+	state    *store.SourceState
+	log      *slog.Logger
+	added    int
+	skipped  []string
+	deferred []server.DeferredRelease
+	// prevDeferred is the previous run's list; wasDeferred holds its
+	// repo@tag, so each release is logged once rather than on every poll.
+	prevDeferred []server.DeferredRelease
+	wasDeferred  map[string]bool
+	// deferredRepos holds the repositories whose deferrals this run has
+	// worked out.
+	deferredRepos map[string]bool
 }
 
 func (r *run) sync(ctx context.Context) error {
@@ -343,6 +396,15 @@ func (r *run) sync(ctx context.Context) error {
 				return err
 			}
 			errs = append(errs, fmt.Errorf("%s: %w", repo, err))
+			if !r.deferredRepos[repo] {
+				// Its releases still wait; keep showing them while the
+				// forge fails.
+				for _, d := range r.prevDeferred {
+					if d.Repo == repo {
+						r.deferred = append(r.deferred, d)
+					}
+				}
+			}
 			continue
 		}
 		if !matched {
@@ -352,6 +414,7 @@ func (r *run) sync(ctx context.Context) error {
 	r.m.mu.Lock()
 	r.m.repoInfo[r.src.Name] = unmatched
 	r.m.skipped[r.src.Name] = r.skipped
+	r.m.deferred[r.src.Name] = r.deferred
 	r.m.mu.Unlock()
 	return errors.Join(errs...)
 }
@@ -412,14 +475,19 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 		return false, err
 	}
 	key := r.src.Forge + ":" + repo
-	// Pending releases are retried, so the listing must reach them. It is
-	// not answered with "not modified": the run that left one pending did
-	// not store the ETag of its listing.
+	// Pending releases are retried, so the listing must reach them, and
+	// must be fetched in full: an ETag stored before a release became
+	// pending can match again once that release is pulled, and "not
+	// modified" would then keep its row forever.
 	since := last
 	if !oldest.IsZero() && oldest.Before(since) {
 		since = oldest
 	}
-	releases, etag, err := r.client.Releases(ctx, repo, since, r.state.ETags[key])
+	etagIn := r.state.ETags[key]
+	if len(pending) > 0 {
+		etagIn = ""
+	}
+	releases, etag, err := r.client.Releases(ctx, repo, since, etagIn)
 	if errors.Is(err, forge.ErrNotModified) {
 		return true, nil
 	}
@@ -429,41 +497,141 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 
 	settings := r.cfg.Settings(r.src)
 	var candidates []forge.Release
+	listed := map[string]bool{}
 	for _, rel := range releases {
 		if rel.Draft || (rel.Prerelease && !settings.Prereleases) {
 			continue
 		}
 		candidates = append(candidates, rel)
+		listed[rel.ID] = true
+	}
+	// A pending release the listing does not hold is looked up on its own:
+	// the listing stops after a few pages, and forges sort by creation
+	// rather than publish time. One that is gone, or became a draft or
+	// pre-release, is dropped, as when a compromised release is pulled
+	// during min_release_age; keeping it would page back to it forever.
+	var lookupErrs []error
+	var stillDeferred []server.DeferredRelease
+	for id := range pending {
+		if listed[id] {
+			continue
+		}
+		rel, found, err := r.client.Release(ctx, repo, id)
+		if err != nil {
+			// Only this release is held up: it stays pending, and the
+			// rest of the repository goes ahead.
+			lookupErrs = append(lookupErrs, fmt.Errorf("look up pending release %s: %w", id, err))
+			// If it was waiting for its age, it still is: keep it in
+			// status rather than log it as new once the forge recovers.
+			for _, d := range r.prevDeferred {
+				if d.Repo == repo && d.ID == id {
+					stillDeferred = append(stillDeferred, d)
+				}
+			}
+			r.log.Warn("look up pending release failed; keeping it pending", "repo", repo, "release_id", id, "err", err)
+			continue
+		}
+		usable := found && !rel.Draft && (!rel.Prerelease || settings.Prereleases)
+		if usable && rel.ID != id {
+			// The forge now names it differently (GitLab IDs gained the
+			// creation time): keep it pending under its current ID.
+			if err := q.MarkPending(ctx, r.src.Name, repo, rel.ID, rel.PublishedAt); err != nil {
+				return false, err
+			}
+			pending[rel.ID] = true
+		}
+		if usable && !listed[rel.ID] {
+			candidates = append(candidates, rel)
+			listed[rel.ID] = true
+		}
+		if usable && rel.ID == id {
+			continue
+		}
+		if err := q.DropPending(ctx, r.src.Name, repo, id); err != nil {
+			return false, err
+		}
+		delete(pending, id)
+		switch {
+		case usable:
+			r.log.Info("pending release renamed by the forge", "repo", repo, "release_id", id, "now", rel.ID)
+		case found:
+			r.log.Warn("pending release is now a draft or pre-release; dropping it", "repo", repo, "release_id", id)
+		default:
+			r.log.Warn("pending release no longer published; dropping it", "repo", repo, "release_id", id)
+		}
+	}
+	// A pending release without package assets has nothing left to wait
+	// or retry for (its assets were removed). Kept pending, it would stop
+	// the listing from using its ETag until a newer release.
+	for _, rel := range candidates {
+		if pending[rel.ID] && !r.hasCandidates(rel) {
+			if err := q.DropPending(ctx, r.src.Name, repo, rel.ID); err != nil {
+				return false, err
+			}
+			delete(pending, rel.ID)
+			r.log.Warn("pending release has no package assets any more; dropping it", "repo", repo, "tag", rel.Tag)
+		}
 	}
 	slices.SortStableFunc(candidates, func(a, b forge.Release) int { return a.PublishedAt.Compare(b.PublishedAt) })
+	gated := settings.MinReleaseAge > 0
+	var young []forge.Release
+	overridden := map[string]bool{}
+	if gated {
+		candidates, young, err = r.splitByAge(ctx, repo, candidates, settings.MinReleaseAge, overridden)
+		if err != nil {
+			return false, err
+		}
+	}
 	var latest string
 	if len(candidates) > 0 {
 		latest = candidates[len(candidates)-1].ID
 	}
-	candidates = slices.DeleteFunc(candidates, func(rel forge.Release) bool {
-		switch {
-		case pending[rel.ID]:
-			return false
-		case !seenAny:
-			// First run, or a newly discovered repository: only the latest.
-			return rel.ID != latest
-		default:
-			// A release published in the same second as the last
-			// processed one is kept; seen_releases skips those already
-			// processed.
-			return rel.PublishedAt.Before(last)
+	waiting, err := r.deferrable(ctx, repo, young, candidates, seenAny, last, pending)
+	if err != nil {
+		return false, err
+	}
+	// A deferred release is recorded as pending, so it stays reachable when
+	// a newer release, let through by an override, moves past it.
+	var deferred []server.DeferredRelease
+	for _, rel := range waiting {
+		if err := q.MarkPending(ctx, r.src.Name, repo, rel.ID, rel.PublishedAt); err != nil {
+			return false, err
 		}
+		d := server.DeferredRelease{ID: rel.ID, Repo: repo, Tag: rel.Tag}
+		if !rel.PublishedAt.IsZero() {
+			d.PublishedAt = store.FormatTime(rel.PublishedAt)
+			d.EligibleAt = store.FormatTime(r.ageFrom(rel).Add(settings.MinReleaseAge))
+		}
+		deferred = append(deferred, d)
+		if !r.wasDeferred[d.Repo+"@"+d.Tag] {
+			r.log.Info("deferring release", "repo", d.Repo, "tag", d.Tag,
+				"published_at", d.PublishedAt, "eligible_at", d.EligibleAt)
+		}
+	}
+	// Status gets them now: they wait even if processing below fails.
+	r.deferred = append(r.deferred, deferred...)
+	r.deferred = append(r.deferred, stillDeferred...)
+	r.deferredRepos[repo] = true
+	candidates = slices.DeleteFunc(candidates, func(rel forge.Release) bool {
+		drop := r.dropped(rel, pending, seenAny, latest, last)
+		if drop && overridden[rel.ID] {
+			r.overrideNoEffect(ctx, repo, rel)
+		}
+		return drop
 	})
 
 	matched, retry := false, false
 	var errs []error
 	for i, rel := range candidates {
-		seen, err := q.SeenRelease(ctx, r.src.Name, repo, rel.ID)
+		seen, err := r.seen(ctx, repo, rel)
 		if err != nil {
 			return matched, err
 		}
 		if seen {
 			continue
+		}
+		if overridden[rel.ID] {
+			r.log.Info("release skips min_release_age by override", "repo", repo, "tag", rel.Tag)
 		}
 		had, transient, err := r.syncRelease(ctx, repo, rel)
 		matched = matched || had
@@ -479,21 +647,181 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 			retry = true
 			continue
 		}
-		if !had && err == nil && i == len(candidates)-1 {
+		if !had && err == nil && i == len(candidates)-1 && (!gated || rel.AssetTimes || overridden[rel.ID]) {
 			// The newest release has no candidate assets yet: many CI
 			// pipelines publish a release and attach assets afterwards.
 			// Leave it unseen, so a later poll picks them up, until a
-			// newer release replaces it.
+			// newer release replaces it. With min_release_age, assets
+			// attached later wait for their own age where the forge dates
+			// them. Where it does not, an old release is processed as it
+			// is, so late assets cannot skip the age; one let through by
+			// an override still waits, since its pipeline may be running.
 			continue
 		}
 		if err := q.MarkSeen(ctx, r.src.Name, repo, rel.Tag, rel.ID, rel.PublishedAt); err != nil {
 			return matched, err
 		}
 	}
-	if etag != "" && !retry {
+	// A deferred release must be listed again, so the listing's ETag is
+	// not kept: "not modified" would hide it until the next new release.
+	if etag != "" && !retry && len(deferred) == 0 {
 		r.state.ETags[key] = etag
 	}
-	return matched || len(candidates) == 0, errors.Join(errs...)
+	return matched || len(candidates) == 0, errors.Join(append(errs, lookupErrs...)...)
+}
+
+// hasCandidates reports whether any of a release's assets could become a
+// package, judged by name as before downloading.
+func (r *run) hasCandidates(rel forge.Release) bool {
+	return slices.ContainsFunc(rel.Assets, func(a forge.Asset) bool { return r.isCandidate(a.Name) })
+}
+
+// seen reports whether a release was processed, under its ID or the ID an
+// older garner gave it.
+func (r *run) seen(ctx context.Context, repo string, rel forge.Release) (bool, error) {
+	q := &r.m.Store.Queries
+	ok, err := q.SeenRelease(ctx, r.src.Name, repo, rel.ID)
+	if err != nil || ok || rel.FormerID == "" {
+		return ok, err
+	}
+	return q.SeenRelease(ctx, r.src.Name, repo, rel.FormerID)
+}
+
+// dropped reports whether this run leaves a listed release alone: on a first
+// run every release but the latest, later only those before the last
+// processed one. Pending releases are always kept.
+func (r *run) dropped(rel forge.Release, pending map[string]bool, seenAny bool, latest string, last time.Time) bool {
+	switch {
+	case pending[rel.ID]:
+		return false
+	case !seenAny:
+		// First run, or a newly discovered repository: only the latest.
+		return rel.ID != latest
+	default:
+		// A release published in the same second as the last processed
+		// one is kept; seen_releases skips those already processed.
+		return rel.PublishedAt.Before(last)
+	}
+}
+
+// overrideNoEffect warns, once per process, that an override lets a
+// release through that this source never processes. A release the
+// override already let through is not warned about.
+func (r *run) overrideNoEffect(ctx context.Context, repo string, rel forge.Release) {
+	if seen, err := r.seen(ctx, repo, rel); err != nil || seen {
+		return
+	}
+	key := r.src.Name + "/" + repo + "@" + rel.Tag
+	r.m.mu.Lock()
+	logged := r.m.noEffect[key]
+	r.m.noEffect[key] = true
+	r.m.mu.Unlock()
+	if !logged {
+		r.log.Warn("override of min_release_age has no effect: the release is older than where this source starts",
+			"repo", repo, "tag", rel.Tag)
+	}
+}
+
+// overrideNotCovering warns, once per process and override, that an
+// override exists for a release it does not cover: the release or one of
+// its package assets is newer than the override, because it was re-created
+// or changed since, or the forge's clock runs ahead of garner's.
+func (r *run) overrideNotCovering(ctx context.Context, repo string, rel forge.Release, from, at time.Time) {
+	// A processed release is never looked at again, and the server
+	// refuses a new override for it.
+	if seen, err := r.seen(ctx, repo, rel); err != nil || seen {
+		return
+	}
+	key := r.src.Name + "/" + repo + "@" + rel.Tag
+	r.m.mu.Lock()
+	logged := r.m.notCovering[key].Equal(at)
+	r.m.notCovering[key] = at
+	r.m.mu.Unlock()
+	if !logged {
+		r.log.Warn("override of min_release_age does not cover this release: it or a package asset is newer than the override; "+
+			"once its assets are attached, run garner sync --ignore-age again",
+			"repo", repo, "tag", rel.Tag, "age_from", store.FormatTime(from), "override_at", store.FormatTime(at))
+	}
+}
+
+// ageFrom is the time a release's age is measured from: its publish time,
+// or the upload of its newest candidate asset when that is later and the
+// forge dates assets. Zero means unknown.
+func (r *run) ageFrom(rel forge.Release) time.Time {
+	t := rel.PublishedAt
+	if t.IsZero() || !rel.AssetTimes {
+		return t
+	}
+	for _, a := range rel.Assets {
+		if r.isCandidate(a.Name) && a.CreatedAt.After(t) {
+			t = a.CreatedAt
+		}
+	}
+	return t
+}
+
+// splitByAge separates the releases old enough for min_release_age, or let
+// through by an override, from the younger ones. A release without a
+// publish time is never old enough. An override covers a release only if
+// it and its candidate assets predate the override, so a release re-created
+// under the same tag, or an asset attached later, waits again. Overridden
+// releases are added to overridden.
+func (r *run) splitByAge(ctx context.Context, repo string, rels []forge.Release, minAge time.Duration,
+	overridden map[string]bool) (ready, young []forge.Release, err error) {
+	now := r.m.now()
+	for _, rel := range rels {
+		from := r.ageFrom(rel)
+		if !from.IsZero() && now.Sub(from) >= minAge {
+			ready = append(ready, rel)
+			continue
+		}
+		at, ok, err := r.m.Store.AgeOverride(ctx, r.src.Name, repo, rel.Tag)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok && from.Before(at) {
+			overridden[rel.ID] = true
+			ready = append(ready, rel)
+			continue
+		}
+		if ok {
+			r.overrideNotCovering(ctx, repo, rel, from, at)
+		}
+		young = append(young, rel)
+	}
+	return ready, young, nil
+}
+
+// deferrable returns the young releases a later run will process once
+// they are old enough: not processed yet, and not older than what this
+// run starts from (the last processed release, or on a first run the
+// latest ready one). Pending releases and those without a publish time
+// are kept regardless of that point.
+func (r *run) deferrable(ctx context.Context, repo string, young, ready []forge.Release, seenAny bool,
+	last time.Time, pending map[string]bool) ([]forge.Release, error) {
+	from, hasFrom := last, seenAny
+	if !seenAny && len(ready) > 0 {
+		from, hasFrom = ready[len(ready)-1].PublishedAt, true
+	}
+	var out []forge.Release
+	for _, rel := range young {
+		if hasFrom && !pending[rel.ID] && !rel.PublishedAt.IsZero() && rel.PublishedAt.Before(from) {
+			continue
+		}
+		// Nothing in it can be published, so there is nothing to wait
+		// for; assets attached later change the listing and wait then.
+		if !r.hasCandidates(rel) {
+			continue
+		}
+		seen, err := r.seen(ctx, repo, rel)
+		if err != nil {
+			return nil, err
+		}
+		if !seen {
+			out = append(out, rel)
+		}
+	}
+	return out, nil
 }
 
 // asset is a downloaded candidate asset.

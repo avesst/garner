@@ -308,6 +308,7 @@ defaults:
   verify: opportunistic       # opportunistic | required
   approval: auto              # auto | manual
   prereleases: false
+  min_release_age: 0s         # e.g. 336h: sync releases once two weeks old
 
 forges:
   - name: github
@@ -451,6 +452,22 @@ not trusted.
 | `forgejo`/`gitea` | `/api/v1/repos/{o}/{r}/releases` | `browser_download_url` |
 | `gitlab` | `/api/v4/projects/{id}/releases` | `assets.links[]` (often Generic Package Registry or external URLs) |
 
+A release's publish time is `published_at` on GitHub and Forgejo. On
+GitLab it is the later of `created_at` and `released_at`: the caller may
+set `released_at` to a past date (a historical release), and only
+`created_at` is set by the server. The listing keeps GitLab's
+`released_at` order, which places an upcoming release where it comes out;
+a backdated release sorts far back and may not be listed at all, which
+publishes nothing early. GitHub and Forgejo also date each asset
+(`created_at`, and on GitHub the later `updated_at`, which a rename moves);
+GitLab links carry no time. GitLab has no release IDs, so garner uses the
+tag plus `created_at`: a release deleted and re-created under the same tag
+is a new release. Records made under the bare tag by an older garner
+still count as processed (the release's former ID). A single release is
+also fetched by ID
+(`/releases/{id}`, on GitLab `/releases/{tag}`), for pending releases a
+listing does not reach.
+
 - Credentials are sent only to the forge's own host (same scheme, host and
   port as `url`). Links to other hosts are fetched without credentials; if
   that fails, the asset fails with a clear error.
@@ -472,8 +489,26 @@ not trusted.
 **Release selection.**
 
 - Drafts are never used. Pre-releases are skipped unless `prereleases: true`.
+- With `min_release_age` (default `0s`, off), a release is processed only
+  once it is that old. Its age runs from its publish time or, where the
+  forge dates assets, from the upload of its newest candidate asset if
+  that is later. A younger release is deferred: not processed, and
+  recorded as pending, so later polls list it again even after a newer
+  release was processed. The listing's ETag is not stored while a release
+  is deferred, or "not modified" would hide it. A release without a
+  publish time is deferred until an override. This gives a compromised
+  release time to be noticed and pulled before garner publishes it. A
+  release without package assets is not deferred: nothing in it can be
+  published, and assets attached later change the listing and wait then.
+  A pending release whose package assets were removed is dropped.
+  Uploads are not affected.
 - First run of a source (or a newly discovered repo): only the latest
-  published release.
+  published release; with `min_release_age`, the latest that is old
+  enough, after which each newer release follows as it ages. A new gated
+  source can therefore publish several recent versions over its first
+  days, where an ungated one publishes only the newest; waiting for the
+  newest to age instead would publish nothing for a project that releases
+  more often than `min_release_age`. Retention trims the extra versions.
 - Later runs: every release published after the last processed one, or in
   the same second, ordered by the forge's publish timestamp
   (`published_at` or equivalent). Tags are
@@ -483,7 +518,41 @@ not trusted.
 - The newest release is not marked processed while it has no candidate
   assets, because many CI pipelines publish a release and attach assets
   afterwards. A newer release ends the wait. Assets added to a release that
-  already had candidates are not picked up.
+  already had candidates are not picked up. With `min_release_age`, assets
+  attached later wait for their own age where the forge dates them. Where
+  it does not (GitLab), an old-enough release is processed as it is, since
+  undated assets attached to it later would skip the age; one let through
+  by an override still waits for its assets.
+- `garner sync <source> --ignore-age <tag> [--repo <repo>]` lets one
+  release skip `min_release_age`, for an urgent fix. It needs the
+  `publish` and `admin` scopes, is logged, and is kept in
+  `release_age_overrides` with the token's name. It covers a release only
+  if the release and its dated candidate assets predate the override, so
+  a release re-created under the same tag, or an asset uploaded after the
+  override, waits again; run the override once the assets are attached.
+  On an org or group source, the repository must be one the last listing
+  found; its case is taken from the listing. A tag already processed is
+  refused with 409, since assets attached to it since are never picked up,
+  unless a release under that tag is deferred: one deleted and re-created
+  upstream is a new release. An override for a release the source never
+  processes (older than where it starts), or one the release or an asset
+  outgrew (changed after the override, or a forge clock ahead of garner's),
+  is logged once per process. The request body is strict: an unknown
+  key or trailing data is a 400. If the sync cannot start, the stored
+  override still answers 202 and applies on the next poll. An override on
+  a source without `min_release_age` is refused with 409.
+- A pending release, deferred or failed, that the listing does not hold
+  is fetched by ID: listings stop after a few pages and are sorted by
+  creation, not publish time. If it is gone, or became a draft or
+  pre-release, as when a compromised release is pulled during the wait,
+  it is dropped from `pending_releases` with a warning, so later listings
+  stop reaching back to it. If the forge now names it differently, it stays
+  pending under its new ID. A failed lookup holds up only that release: it
+  stays pending, the run reports the error, and the repository's other
+  releases go ahead. While a repository has pending releases its listing is fetched
+  without its ETag: the listing may again match one stored before the
+  release appeared. While a listing fails, the repository's deferred
+  releases stay in status.
 - If upstream deletes a release, the packages stay; retention handles them.
 - A failed download leaves the release pending: every later run retries
   it, fetching the release listing far enough back to reach it, and newer
@@ -722,6 +791,7 @@ missing, `serve` refuses to start and says which tools are missing.
   - `garner_sync_last_success_timestamp_seconds{source}`
   - `garner_sync_errors_total{source}`
   - `garner_sync_packages_added_total{source}`
+  - `garner_sync_releases_deferred{source}`
   - `garner_forge_ratelimit_remaining{forge}`
   - `garner_publish_duration_seconds`
   - `garner_publish_last_success_timestamp_seconds`
@@ -754,6 +824,7 @@ the configuration and database are reachable. The others call the API with
 | `remove NAME [--version] [--arch]` | API | admin |
 | `owner list` / `owner set NAME OWNER` | API | admin |
 | `sync SOURCE` | API | publish |
+| `sync SOURCE --ignore-age TAG [--repo REPO]` | API | publish and admin |
 | `publish` | API | publish |
 | `packages list` | API | none |
 | `approve PACKAGE` / `conflicts list` | API | publish (approving an ownership hold: publish and admin) |
@@ -771,7 +842,7 @@ the configuration and database are reachable. The others call the API with
 | `DELETE /api/v1/packages/{name}` | admin |
 | `GET /api/v1/owners` | none |
 | `PUT /api/v1/owners/{name}` | admin |
-| `POST /api/v1/sources/{name}/sync` | publish |
+| `POST /api/v1/sources/{name}/sync` | publish; publish and admin with `ignore_age` |
 | `GET /api/v1/conflicts` | publish |
 | `POST /api/v1/packages/{id}/approve` | publish; publish and admin for an ownership hold |
 | `GET /api/v1/snapshots` | none |

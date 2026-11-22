@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/avesst/garner/internal/auth"
 	"github.com/avesst/garner/internal/blob"
@@ -29,16 +31,27 @@ import (
 
 // noSources is a syncer without configured sources; like the real one, it
 // reports them as a nil slice.
-type noSources struct{}
+// It records the overrides of min_release_age it is given; tests can set
+// its status and make Trigger fail.
+type noSources struct {
+	ignored    []string
+	status     []SourceStatus
+	triggerErr error
+}
 
-func (noSources) Trigger(string) error                  { return nil }
-func (noSources) Status(context.Context) []SourceStatus { return nil }
+func (n *noSources) Trigger(string) error                  { return n.triggerErr }
+func (n *noSources) Status(context.Context) []SourceStatus { return n.status }
+func (n *noSources) IgnoreAge(_ context.Context, source, repo, tag, by string) error {
+	n.ignored = append(n.ignored, source+" "+repo+"@"+tag+" by "+by)
+	return nil
+}
 
 type fixture struct {
 	cfg     *config.Config
 	h       http.Handler
 	st      *store.Store
 	in      *ingest.Ingester
+	sync    *noSources
 	secrets map[string]string
 }
 
@@ -58,7 +71,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	reg, _ := format.NewRegistry(deb.Format{})
-	f := &fixture{cfg: config.Default(), secrets: map[string]string{}}
+	f := &fixture{cfg: config.Default(), sync: &noSources{}, secrets: map[string]string{}}
 	f.cfg.Server.PublicURL = "http://repo.test"
 	f.cfg.Storage.MaxPackageSize = 64 << 10
 	f.cfg.Server.TrustedProxies = []string{"10.0.0.1"}
@@ -68,7 +81,7 @@ func newFixture(t *testing.T) *fixture {
 	sched := &publish.Scheduler{}
 	s := &Server{
 		Store: f.st, Formats: reg, Config: conf, Metrics: metrics.NewRegistry(), Root: root, Log: log,
-		Scheduler: sched, Syncer: noSources{},
+		Scheduler: sched, Syncer: f.sync,
 		Ingester: &ingest.Ingester{Store: f.st, Blobs: blobs, Formats: reg, Config: conf, TmpDir: root,
 			Publish: sched.Request, Log: log},
 		Publisher: &publish.Publisher{Store: f.st, Blobs: blobs, Formats: reg, Config: conf,
@@ -308,5 +321,74 @@ func TestApproveOwnershipHoldNeedsAdmin(t *testing.T) {
 	}
 	if code := approve(own.Package.ID, "pub"); code != http.StatusOK {
 		t.Errorf("approve of the owner's hold with publish: HTTP %d, want 200", code)
+	}
+}
+
+// Skipping min_release_age needs admin on top of publish, and a repository
+// whenever the source has more than one.
+func TestSyncIgnoreAge(t *testing.T) {
+	f := newFixture(t)
+	off := time.Duration(0)
+	f.cfg.Defaults.MinReleaseAge = 72 * time.Hour
+	f.cfg.Sources = []config.Source{{Name: "tool", Repo: "org/tool"}, {Name: "org", Org: "org"},
+		{Name: "unlisted", Org: "other"}, {Name: "ungated", Repo: "org/free", MinReleaseAge: &off}}
+	if err := f.st.SaveRepos(context.Background(), "org", []string{"org/lib", "org/app"}); err != nil {
+		t.Fatal(err)
+	}
+	for tag, id := range map[string]string{"v0": "100", "v5": "105"} {
+		if err := f.st.MarkSeen(context.Background(), "tool", "org/tool", tag, id, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// v5 was processed, then deleted and re-created upstream: the new
+	// release waits.
+	f.sync.status = []SourceStatus{{Name: "tool", Deferred: []DeferredRelease{{Repo: "org/tool", Tag: "v5"}}}}
+	body := func(tag, repo string) []byte {
+		b, _ := json.Marshal(SyncRequest{IgnoreAge: &IgnoreAgeRequest{Tag: tag, Repo: repo}})
+		return b
+	}
+	tests := []struct {
+		name, source, token string
+		body                []byte
+		code                int
+	}{
+		{"plain sync", "tool", "pub", nil, http.StatusAccepted},
+		{"publish only", "tool", "pub", body("v1", ""), http.StatusForbidden},
+		{"admin only", "tool", "adm", body("v1", ""), http.StatusForbidden},
+		{"single repo", "tool", "pubadm", body("v1", ""), http.StatusAccepted},
+		{"wrong repo", "tool", "pubadm", body("v1", "org/other"), http.StatusBadRequest},
+		{"org without repo", "org", "pubadm", body("v2", ""), http.StatusBadRequest},
+		{"org with repo", "org", "pubadm", body("v2", "org/lib"), http.StatusAccepted},
+		{"repo in other case", "org", "pubadm", body("v3", "Org/App"), http.StatusAccepted},
+		{"single repo in other case", "tool", "pubadm", body("v4", "Org/Tool"), http.StatusAccepted},
+		{"unknown repo", "org", "pubadm", body("v2", "org/nope"), http.StatusBadRequest},
+		{"already processed", "tool", "pubadm", body("v0", ""), http.StatusConflict},
+		{"source without the gate", "ungated", "pubadm", body("v1", ""), http.StatusConflict},
+		{"re-created after processing", "tool", "pubadm", body("v5", ""), http.StatusAccepted},
+		{"source never listed", "unlisted", "pubadm", body("v2", "other/x"), http.StatusBadRequest},
+		{"no tag", "tool", "pubadm", body("", ""), http.StatusBadRequest},
+		{"unknown source", "nope", "pubadm", body("v1", ""), http.StatusNotFound},
+		{"bad body", "tool", "pubadm", []byte("{"), http.StatusBadRequest},
+		{"misspelled key", "tool", "pubadm", []byte(`{"ignoreAge": {"tag": "v1"}}`), http.StatusBadRequest},
+		{"trailing data", "tool", "pubadm", append(body("v1", ""), []byte(` {}`)...), http.StatusBadRequest},
+		{"empty object", "tool", "pub", []byte(`{}`), http.StatusAccepted},
+	}
+	for _, tt := range tests {
+		w := f.do(http.MethodPost, "/api/v1/sources/"+tt.source+"/sync", tt.token, tt.body, "")
+		if w.Code != tt.code {
+			t.Errorf("%s: HTTP %d, want %d: %s", tt.name, w.Code, tt.code, w.Body)
+		}
+	}
+	want := "tool org/tool@v1 by pubadm; org org/lib@v2 by pubadm; org org/app@v3 by pubadm; tool org/tool@v4 by pubadm; tool org/tool@v5 by pubadm"
+	if got := strings.Join(f.sync.ignored, "; "); got != want {
+		t.Errorf("overrides = %q, want %q", got, want)
+	}
+
+	// The override is stored even when the sync cannot start, so the
+	// answer must not read as a failure.
+	f.sync.triggerErr = errors.New(`no source named "tool"`)
+	w := f.do(http.MethodPost, "/api/v1/sources/tool/sync", "pubadm", body("v6", ""), "")
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), "override recorded; sync not started") {
+		t.Errorf("trigger failure: HTTP %d: %s", w.Code, w.Body)
 	}
 }
