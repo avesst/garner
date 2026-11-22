@@ -44,7 +44,17 @@ type env struct {
 	onFile map[string]func() // path suffix -> hook run once before serving
 }
 
+// debStable is newEnv's deb section.
+const debStable = "deb:\n  architectures: [amd64]\n  suites: [stable]\n"
+
 func newEnv(t *testing.T, extraConfig string) *env {
+	t.Helper()
+	return newEnvWith(t, debStable, "", extraConfig)
+}
+
+// newEnvWith is newEnv with the deb section and extra storage settings
+// (indented lines such as "  gc_grace: 0s\n") given.
+func newEnvWith(t *testing.T, debSection, storage, extraConfig string) *env {
 	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not installed")
@@ -65,10 +75,7 @@ database:
   url: sqlite://%s/garner.db
 storage:
   path: %s
-deb:
-  architectures: [amd64]
-  suites: [stable]
-%s`, url, dir, dir, extraConfig)
+%s%s%s`, url, dir, dir, storage, debSection, extraConfig)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -133,42 +140,49 @@ func verifyAfter(t *testing.T, url, user, secret string) {
 			t.Logf("verify skipped: garner is not ready (HTTP %d)", resp.StatusCode)
 			return
 		}
-		// ready=1 waits out a publish the scheduler has not run yet.
-		var body []byte
-		for i := 0; ; i++ {
-			req, _ := http.NewRequest(http.MethodPost, url+"/api/v1/verify?ready=1", nil)
-			req.SetBasicAuth(user, secret)
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Errorf("verify: %v", err)
-				return
-			}
-			body, _ = io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusConflict && i < 150 {
-				time.Sleep(200 * time.Millisecond)
-				continue
-			}
-			if resp.StatusCode != http.StatusOK {
-				t.Errorf("verify: HTTP %d: %s", resp.StatusCode, body)
-				return
-			}
-			break
-		}
-		var rep publish.VerifyReport
-		if err := json.Unmarshal(body, &rep); err != nil {
-			t.Errorf("verify: %v: %s", err, body)
+		checkVerify(t, url, user, secret)
+	})
+}
+
+// checkVerify runs garner verify through the API: errors fail the test,
+// warnings are logged.
+func checkVerify(t *testing.T, url, user, secret string) {
+	t.Helper()
+	// ready=1 waits out a publish the scheduler has not run yet.
+	var body []byte
+	for i := 0; ; i++ {
+		req, _ := http.NewRequest(http.MethodPost, url+"/api/v1/verify?ready=1", nil)
+		req.SetBasicAuth(user, secret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Errorf("verify: %v", err)
 			return
 		}
-		for _, p := range rep.Problems {
-			if p.Severity == format.SeverityError {
-				t.Errorf("verify: %s %s: %s", p.Check, p.Path, p.Message)
-			} else {
-				t.Logf("verify warning: %s %s: %s", p.Check, p.Path, p.Message)
-			}
+		body, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusConflict && i < 150 {
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
-		t.Logf("verify: snapshot %s, %d packages, %d errors, %d warnings", rep.Snapshot, rep.Packages, rep.Errors, rep.Warnings)
-	})
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("verify: HTTP %d: %s", resp.StatusCode, body)
+			return
+		}
+		break
+	}
+	var rep publish.VerifyReport
+	if err := json.Unmarshal(body, &rep); err != nil {
+		t.Errorf("verify: %v: %s", err, body)
+		return
+	}
+	for _, p := range rep.Problems {
+		if p.Severity == format.SeverityError {
+			t.Errorf("verify: %s %s: %s", p.Check, p.Path, p.Message)
+		} else {
+			t.Logf("verify warning: %s %s: %s", p.Check, p.Path, p.Message)
+		}
+	}
+	t.Logf("verify: snapshot %s, %d packages, %d errors, %d warnings", rep.Snapshot, rep.Packages, rep.Errors, rep.Warnings)
 }
 
 // hook runs fn once, after the response for a path ending in suffix has
@@ -199,6 +213,58 @@ func (e *env) publish() {
 	if _, err := e.app.Publisher.Publish(context.Background()); err != nil {
 		e.t.Fatal(err)
 	}
+}
+
+// api calls garner's API with the ci token, which has every scope, and
+// returns the body; a status other than 200 fails the test.
+func (e *env) api(method, path string, body []byte) []byte {
+	e.t.Helper()
+	req, _ := http.NewRequest(method, e.url+path, bytes.NewReader(body))
+	req.SetBasicAuth("ci", e.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		e.t.Fatalf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, out)
+	}
+	return out
+}
+
+// verify checks the published tree now (checkVerify).
+func (e *env) verify() {
+	e.t.Helper()
+	checkVerify(e.t, e.url, "ci", e.token)
+}
+
+// client is a container that stays up for a whole test, so packages
+// installed in one phase are there in the next, as on a real host.
+type client struct {
+	t  *testing.T
+	id string
+}
+
+func startClient(t *testing.T, image string) *client {
+	t.Helper()
+	out, err := exec.Command("docker", "run", "-d", "--rm", "--network", "host", image, "sleep", "infinity").CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run %s: %v\n%s", image, err, out)
+	}
+	c := &client{t: t, id: strings.TrimSpace(string(out))}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", c.id).Run() })
+	return c
+}
+
+// run runs a shell script in the client and fails the test if it fails.
+func (c *client) run(script string) string {
+	c.t.Helper()
+	out, err := exec.Command("docker", "exec", c.id, "sh", "-ec", script).CombinedOutput()
+	if err != nil {
+		c.t.Fatalf("client script failed: %v\n%s\n--- output:\n%s", err, script, out)
+	}
+	return string(out)
 }
 
 // run runs a shell script in a container on the host network and returns

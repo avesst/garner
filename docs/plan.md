@@ -83,6 +83,16 @@ second, and a pool file moved aside is reported. It found that a format
 without packages had dangling pool links (fixed). Not done: re-hashing
 blobs (`--deep`), for which a background job would be needed.
 
+## Lifecycle e2e tests (after 0.1.0)
+
+Done: `TestAptLifecycle` (Debian 13, Ubuntu 26.04) and `TestDnfLifecycle`
+(AlmaLinux 10, Fedora 44) keep one client container through a
+repository's life, with garner verify after each step. apt: install,
+upgrade, an older version on purpose, removal, rollback, a second suite,
+i386 multiarch, and a GC that deletes blobs and pool files. dnf: install,
+upgrade, removal, rollback. Not covered yet: older clients (step 4 of the
+hardening list) and crash and concurrency tests.
+
 ## Minimum release age for sync (after 0.1.0)
 
 Done; unit-tested against fake forges, not in `just e2e`. On 2026-11-22
@@ -174,7 +184,7 @@ pulled first.
 | Default deployment | 0.1.0 | Proxy serves `public/`; README "Put it behind a reverse proxy" |
 | Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
 | `Valid-Until` in `InRelease`, so apt detects metadata frozen by an attacker | After 0.1.0 | Candidate. Needs a periodic re-sign and publish even when nothing changed, and an expiry window longer than that period. deb only; rpm has no equivalent |
-| i686 rpms (multilib): published as their own `rpm/<release>/i686` repository, which x86_64 clients do not read, while Fedora and EL ship multilib packages in the x86_64 repository | Before relying on i686 | Done: i686 packages are listed in the x86_64 repository and i686 needs x86_64 configured; dnf installs both architectures side by side in AlmaLinux 10 and Fedora 44 (`just e2e`). deb is unchanged: garner publishes `binary-i386` for apt multiarch, which no test covers yet |
+| i686 rpms (multilib): published as their own `rpm/<release>/i686` repository, which x86_64 clients do not read, while Fedora and EL ship multilib packages in the x86_64 repository | Before relying on i686 | Done: i686 packages are listed in the x86_64 repository and i686 needs x86_64 configured; dnf installs both architectures side by side in AlmaLinux 10 and Fedora 44 (`just e2e`). deb is unchanged: apt with `dpkg --add-architecture i386` installs a `Multi-Arch: same` package for amd64 and i386 side by side (`TestAptLifecycle`) |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve
