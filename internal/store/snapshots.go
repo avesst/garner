@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+
+	"github.com/avesst/garner/internal/format"
 )
 
 // Snapshot is one row of snapshots.
@@ -107,6 +109,43 @@ func (q *Queries) SnapshotEntries(ctx context.Context, id string) ([]SnapshotEnt
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SnapshotPackages returns a snapshot's packages, each with Distribution
+// set and ServedSHA256 and ServedSize giving the blob the snapshot serves,
+// which a later re-sign may have replaced. ServedSize is -1 when that
+// blob has no row.
+func (q *Queries) SnapshotPackages(ctx context.Context, id string) ([]*format.Package, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT `+packageColumns+`, sp.distribution,
+			COALESCE(NULLIF(sp.served_sha256, ''), p.signed_blob_sha256, p.blob_sha256), b.size
+		FROM snapshot_packages sp JOIN packages p ON p.id = sp.package_id
+		LEFT JOIN blobs b ON b.sha256 = COALESCE(NULLIF(sp.served_sha256, ''), p.signed_blob_sha256, p.blob_sha256)
+		WHERE sp.snapshot_id = ?
+		ORDER BY p.format, p.name, sp.distribution, p.arch, p.id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*format.Package
+	for rows.Next() {
+		var dist, served string
+		var size sql.NullInt64
+		p, err := scanPackage(rows, &dist, &served, &size)
+		if err != nil {
+			return nil, err
+		}
+		p.Distribution = dist
+		p.SignedSHA256 = ""
+		if served != p.BlobSHA256 {
+			p.SignedSHA256 = served
+		}
+		p.ServedSize = -1
+		if size.Valid {
+			p.ServedSize = size.Int64
+		}
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

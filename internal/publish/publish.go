@@ -92,6 +92,11 @@ func (p *Publisher) Publish(ctx context.Context) (*store.Snapshot, error) {
 func (p *Publisher) Stale(ctx context.Context) (bool, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.stale(ctx)
+}
+
+// stale is Stale with the publish lock held.
+func (p *Publisher) stale(ctx context.Context) (bool, error) {
 	cur, err := p.Store.CurrentSnapshot(ctx)
 	if errors.Is(err, store.ErrNotFound) {
 		return true, nil
@@ -445,15 +450,7 @@ func (p *Publisher) rootFiles(cfg *config.Config) []string {
 // are no longer configured. It never retargets a link (section 4).
 func (p *Publisher) reconcileLinks(cfg *config.Config) error {
 	pub := p.publicDir()
-	want := map[string]string{"snapshots": "../snapshots"}
-	for _, f := range p.rootFiles(cfg) {
-		want[f] = "current/" + f
-	}
-	for _, fm := range p.Formats.All() {
-		for _, l := range fm.Links(cfg) {
-			want[filepath.FromSlash(l.Path)] = l.Target
-		}
-	}
+	want := p.fixedLinks(cfg)
 	for path, target := range want {
 		full := filepath.Join(pub, path)
 		if cur, err := os.Readlink(full); err == nil {
@@ -488,6 +485,20 @@ func (p *Publisher) reconcileLinks(cfg *config.Config) error {
 		removeEmptyParents(filepath.Dir(s), pub)
 	}
 	return nil
+}
+
+// fixedLinks maps each fixed link of public/, relative to it, to its target.
+func (p *Publisher) fixedLinks(cfg *config.Config) map[string]string {
+	want := map[string]string{"snapshots": "../snapshots"}
+	for _, f := range p.rootFiles(cfg) {
+		want[f] = "current/" + f
+	}
+	for _, fm := range p.Formats.All() {
+		for _, l := range fm.Links(cfg) {
+			want[filepath.FromSlash(l.Path)] = l.Target
+		}
+	}
+	return want
 }
 
 func removeEmptyParents(dir, stop string) {

@@ -173,6 +173,10 @@ type Format interface {
 	Links(c *config.Config) []Link
 	// Clients returns one client file per distribution, in ClientOrder.
 	Clients(c *config.Config, publicURL string) []ClientFile
+	// Verify checks a rendered snapshot the way a client reads it, from
+	// the signed top-level files down to the package files, against the
+	// packages the snapshot serves (garner verify).
+	Verify(ctx context.Context, r *VerifyRequest) []Problem
 }
 
 // Registry holds the enabled formats in a fixed order.
