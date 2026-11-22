@@ -63,6 +63,26 @@ Caddy:
   a pinned snapshot URL, publish, GC, and sync from a public GitHub
   repository.
 
+On 2026-11-22, with `e65e25b`, 539 real packages (Debian 12, 13 and sid,
+Ubuntu 22.04 and 24.04, Fedora 44, AlmaLinux 9 and 10, GitHub releases;
+1.33 GB) were uploaded one by one into their own suites and releases on a
+container with 2 cores and 1 GiB. 536 were accepted; the rest were an
+unconfigured architecture and a name owned by a source. garner peaked at
+121 MB RSS and published 546 packages in 1.8 s. In containers of each
+distribution, apt and dnf (`gpgcheck` and `repo_gpgcheck` on) downloaded
+every indexed package and checked it against the indexes and, for rpm,
+the key. Packages were not installed. A build of the verify branch then
+reported no problems on that tree.
+
+## Repository verification (after 0.1.0)
+
+Done: `garner verify` and `POST /api/v1/verify` (design section 9,
+Verification). Unit tests break each checked property; every e2e test
+ends with a verify; on the test host the corpus above verifies in under a
+second, and a pool file moved aside is reported. It found that a format
+without packages had dangling pool links (fixed). Not done: re-hashing
+blobs (`--deep`), for which a background job would be needed.
+
 ## Minimum release age for sync (after 0.1.0)
 
 Done; unit-tested against fake forges, not in `just e2e`. On 2026-11-22
@@ -154,6 +174,7 @@ pulled first.
 | Default deployment | 0.1.0 | Proxy serves `public/`; README "Put it behind a reverse proxy" |
 | Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
 | `Valid-Until` in `InRelease`, so apt detects metadata frozen by an attacker | After 0.1.0 | Candidate. Needs a periodic re-sign and publish even when nothing changed, and an expiry window longer than that period. deb only; rpm has no equivalent |
+| i686 rpms (multilib): published as their own `rpm/<release>/i686` repository, which x86_64 clients do not read, while Fedora and EL ship multilib packages in the x86_64 repository | Before relying on i686 | Open; found with the test host corpus |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve
