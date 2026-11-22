@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
@@ -238,6 +239,34 @@ func TestReadControlMemberNames(t *testing.T) {
 				t.Errorf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// A member name with many components compresses to a few bytes, so the
+// time to check member names must not grow with the square of its length.
+func TestReadDeepMemberName(t *testing.T) {
+	name := strings.Repeat("a/", 50000) + "x"
+	deb := buildDeb(t, debMember{"control.tar.gz", compress(t, ".gz", tarFiles(t, "./control", testControl, name, ""))})
+	start := time.Now()
+	_, err := Read(bytes.NewReader(deb))
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("reading a %d byte deb took %v (err = %v)", len(deb), d, err)
+	}
+}
+
+// Names within the length limit still have many components each, and a
+// control.tar of a few hundred KiB can hold thousands of them.
+func TestReadManyDeepMemberNames(t *testing.T) {
+	files := []string{"./control", testControl}
+	deep := strings.Repeat("a/", 2040)
+	for i := range 2000 {
+		files = append(files, fmt.Sprintf("%s%d", deep, i), "")
+	}
+	deb := buildDeb(t, debMember{"control.tar.gz", compress(t, ".gz", tarFiles(t, files...))})
+	start := time.Now()
+	_, err := Read(bytes.NewReader(deb))
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("reading a %d byte deb took %v (err = %v)", len(deb), d, err)
 	}
 }
 

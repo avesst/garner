@@ -24,6 +24,7 @@ import (
 const (
 	maxControlTar  = 256 << 20 // decompressed control.tar
 	maxControlFile = 1 << 20   // the control file itself
+	maxMemberName  = 4096      // a control.tar member name, PATH_MAX
 	maxZstdWindow  = 64 << 20
 )
 
@@ -268,6 +269,11 @@ type controlMembers struct {
 
 // add records a member and returns its cleaned name.
 func (m *controlMembers) add(h *tar.Header) (string, error) {
+	// Longer than PATH_MAX, tar cannot extract it; deep names also make
+	// check slower.
+	if len(h.Name) > maxMemberName {
+		return "", fmt.Errorf("control.tar member name is %d bytes, limit %d", len(h.Name), maxMemberName)
+	}
 	if strings.HasPrefix(h.Name, "/") {
 		return "", fmt.Errorf("control.tar member %q is absolute", h.Name)
 	}
@@ -297,12 +303,16 @@ func (m *controlMembers) add(h *tar.Header) (string, error) {
 
 // check rejects a member below a symlink member, in either order: tar
 // would write it through the symlink, to another name.
+// Names below a symlink start with its name and a slash, and sort right
+// at that prefix; walking up each name's directories is quadratic in its
+// length.
 func (m *controlMembers) check() error {
-	for _, name := range m.names {
-		for dir := path.Dir(name); dir != "."; dir = path.Dir(dir) {
-			if m.symlinks[dir] {
-				return fmt.Errorf("control.tar member %q is under symlink %q", name, dir)
-			}
+	slices.Sort(m.names)
+	for link := range m.symlinks {
+		prefix := link + "/"
+		i, _ := slices.BinarySearch(m.names, prefix)
+		if i < len(m.names) && strings.HasPrefix(m.names[i], prefix) {
+			return fmt.Errorf("control.tar member %q is under symlink %q", m.names[i], link)
 		}
 	}
 	return nil
