@@ -36,6 +36,7 @@ API commands (--url or GARNER_URL; GARNER_TOKEN=name:secret):
   gc
   reload
   status
+  verify [--wait D] [--config-hash H] [--strict]
 
   version                          Print the version and exit.
   help                             Show this help.
@@ -63,7 +64,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "token":
 		return runToken(rest, stdout, stderr)
 	case "upload", "remove", "owner", "sync", "approve", "conflicts", "packages",
-		"snapshot", "publish", "gc", "reload", "status":
+		"snapshot", "publish", "gc", "reload", "status", "verify":
 		return runAPI(cmd, rest, stdout, stderr)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "garner", versionString())

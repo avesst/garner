@@ -569,6 +569,41 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// verify checks the published tree (Publisher.Verify). config_hash makes
+// it answer 409 while another configuration is loaded, and ready=1 while a
+// publish is pending, so that garner verify --wait retries until the
+// state it waits for has been published.
+func (s *Server) verify(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if want := strings.ToLower(q.Get("config_hash")); want != "" {
+		if len(want) < 7 {
+			writeError(w, http.StatusBadRequest, "config_hash needs at least 7 hex digits")
+			return
+		}
+		if loaded := s.Config().Hash; !strings.HasPrefix(loaded, want) {
+			writeError(w, http.StatusConflict, fmt.Sprintf("configuration %.12s is loaded, not %s", loaded, want))
+			return
+		}
+	}
+	if q.Get("ready") == "1" {
+		stale, err := s.Publisher.Stale(r.Context())
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		if stale {
+			writeError(w, http.StatusConflict, "a publish is pending")
+			return
+		}
+	}
+	rep, err := s.Publisher.Verify(r.Context())
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
 func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 	ts, err := s.Store.Tokens(r.Context())
 	if err != nil {

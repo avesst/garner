@@ -713,6 +713,37 @@ missing, `serve` refuses to start and says which tools are missing.
    written. A publish that fails without crashing, cancelled ones
    included, removes its snapshot.
 
+### Verification
+
+`garner verify` (`POST /api/v1/verify`) checks the published tree against
+the database without changing anything, under the publish lock so no
+publish or GC runs meanwhile. It is for use after upgrading or patching
+garner, after a GC or a restore, when a client reports a hash mismatch,
+and in CI after a configuration push.
+
+- Core: `public/current` points to the snapshot the database marks
+  current; snapshot rows and directories match; the fixed links resolve;
+  `key.asc` and `key.gpg` hold the configured keys; every served package
+  has its blob and pool file with the recorded size.
+- Each format reads its metadata as its clients do, from the signature
+  down: deb checks `InRelease` and `Release.gpg`, every file `Release`
+  lists and its by-hash copy, the compressed `Packages` and each stanza
+  against the pool and the package set; rpm checks `repomd.xml.asc`,
+  every repodata file before and after decompression, and `primary`
+  against the pool and the package set. Both check that the previous
+  snapshot's index files are still served (step 4 of Publish). The formats
+  parse the files themselves rather than reusing the renderers.
+- An error is a state a client can fail on. A warning is one the next
+  publish or GC repairs: a pending publish, a link no longer configured,
+  and pool files, blobs, snapshot directories and temp files nothing
+  references (the last three once older than `gc_grace`).
+- Contents are compared with recorded sizes and hashes; blobs are not
+  re-hashed.
+- `config_hash` (a sha256 prefix of the configuration file) and `ready=1`
+  make the endpoint answer `409` while another configuration is loaded or
+  a publish is pending; `garner verify --wait` and `--config-hash` retry
+  until then. The CLI exits 1 on errors, with `--strict` on warnings too.
+
 ## 10. Signing
 
 - `garner init` generates an RSA 4096 key when none is configured. An
@@ -830,6 +861,7 @@ the configuration and database are reachable. The others call the API with
 | `approve PACKAGE` / `conflicts list` | API | publish (approving an ownership hold: publish and admin) |
 | `snapshot list` / `snapshot rollback ID` | API | publish |
 | `gc` | API | admin |
+| `verify` | API | publish |
 | `status` | API | none |
 
 ### HTTP API (v1)
@@ -850,6 +882,7 @@ the configuration and database are reachable. The others call the API with
 | `POST /api/v1/reload` | admin |
 | `POST /api/v1/gc` | admin |
 | `POST /api/v1/publish` | publish |
+| `POST /api/v1/verify` | publish |
 | `POST/GET/DELETE /api/v1/tokens` | admin |
 
 ### Landing page

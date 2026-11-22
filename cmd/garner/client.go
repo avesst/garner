@@ -89,15 +89,23 @@ func (c *client) do(method, path string, query url.Values, body io.Reader, out a
 			Error string `json:"error"`
 		}
 		if json.Unmarshal(data, &e) == nil && e.Error != "" {
-			return fmt.Errorf("%s (HTTP %d)", e.Error, resp.StatusCode)
+			return &apiError{status: resp.StatusCode, msg: fmt.Sprintf("%s (HTTP %d)", e.Error, resp.StatusCode)}
 		}
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return &apiError{status: resp.StatusCode, msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))}
 	}
 	if out != nil {
 		return json.Unmarshal(data, out)
 	}
 	return nil
 }
+
+// apiError is an error response from the API.
+type apiError struct {
+	status int
+	msg    string
+}
+
+func (e *apiError) Error() string { return e.msg }
 
 func jsonBody(v any) io.Reader {
 	b, _ := json.Marshal(v)
@@ -123,6 +131,9 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print the raw JSON response")
 	ignoreAge := fs.String("ignore-age", "", "release tag that may skip min_release_age (sync)")
 	repo := fs.String("repo", "", "repository of --ignore-age, for org and group sources (sync)")
+	wait := fs.Duration("wait", 0, "wait up to this long for a pending publish before checking (verify)")
+	configHash := fs.String("config-hash", "", "wait until this configuration (sha256 prefix) is published (verify)")
+	strict := fs.Bool("strict", false, "exit 1 on warnings too (verify)")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return 2
@@ -348,6 +359,8 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		fmt.Fprintf(stdout, "reloaded; configuration %.12s\n", out["config_hash"])
+	case "verify":
+		return runVerify(c, *wait, *configHash, *strict, print, stdout, fail)
 	case "status":
 		var st server.Status
 		if err := c.do(http.MethodGet, "/api/v1/status", nil, nil, &st); err != nil {

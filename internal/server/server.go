@@ -117,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	handle("POST /api/v1/publish", s.authed(auth.ScopePublish, s.publishNow))
 	handle("POST /api/v1/reload", s.authed(auth.ScopeAdmin, s.reload))
 	handle("POST /api/v1/gc", s.authed(auth.ScopeAdmin, s.gc))
+	handle("POST /api/v1/verify", s.authed(auth.ScopePublish, s.verify))
 	handle("GET /api/v1/tokens", s.authed(auth.ScopeAdmin, s.listTokens))
 	handle("POST /api/v1/tokens", s.authed(auth.ScopeAdmin, s.createToken))
 	handle("DELETE /api/v1/tokens/{name}", s.authed(auth.ScopeAdmin, s.revokeToken))

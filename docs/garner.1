@@ -176,6 +176,38 @@ Scope:
 .B status
 Show the version, configuration, current snapshot, open conflicts, held
 packages and the state of each source.
+.TP
+.B verify \fR[\fB\-\-wait \fID\fR] [\fB\-\-config\-hash \fIH\fR] [\fB\-\-strict\fR]
+Check that the published repository is consistent and matches the
+database, reading it as apt and dnf do: signatures against the published
+keys, every index file by size and hash, each package in the indexes
+against its pool file, and the index files of the previous snapshot.
+Changes nothing; while it runs, publishes and GC wait.
+Prints each problem as an
+.B error
+(a client can fail) or a
+.B warning
+(state the next publish or GC repairs, such as unreferenced files).
+Scope:
+.BR publish .
+.IP
+.B \-\-wait
+retries for up to
+.I D
+(such as
+.BR 5m )
+while a publish is pending, so the check covers the latest uploads and
+configuration.
+.B \-\-config\-hash
+also waits until the configuration whose sha256 starts with
+.I H
+(at least 7 hex digits) is loaded and published; without
+.B \-\-wait
+it waits up to 5 minutes.
+Use it after pushing a configuration:
+.BR "sha256sum garner.yaml" .
+.B \-\-strict
+exits 1 on warnings too.
 .SH OTHER COMMANDS
 .TP
 .BR version ", " \-\-version
@@ -218,7 +250,11 @@ Default storage directory and SQLite database.
 Success.
 .TP
 .B 1
-The command failed, or at least one file of an upload failed.
+The command failed, at least one file of an upload failed, or
+.B verify
+found an error (with
+.BR \-\-strict ,
+also a warning).
 .TP
 .B 2
 Usage error.
@@ -239,6 +275,14 @@ Upload a package from CI:
 export GARNER_URL=https://pkg.example.com
 export GARNER_TOKEN=ci:...
 garner upload \-\-suite stable dist/*.deb
+.fi
+.RE
+.PP
+Check the repository after pushing a configuration change:
+.PP
+.RS
+.nf
+garner verify \-\-config\-hash "$(sha256sum garner.yaml | cut \-c1\-12)"
 .fi
 .RE
 .SH SEE ALSO
