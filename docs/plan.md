@@ -65,9 +65,17 @@ Caddy:
 
 ## Minimum release age for sync (after 0.1.0)
 
-Done; unit-tested against fake forges, not yet on a real host or in
-`just e2e`. Next check: a gated source on the test host against a real
-GitHub repository. Supply-chain protection: a synced release is published only
+Done; unit-tested against fake forges, not in `just e2e`. On 2026-11-22
+a build of `86b6b92` on the test host ran a gated source (`cli/cli`,
+168h, unauthenticated GitHub): the first run took the newest old-enough
+release and deferred the newer one, shown in status, the metric and the
+log once; the listing's ETag was not kept while it waited; the override
+was refused without admin or publish, for a processed tag, a wrong repo
+and an ungated source, then let the release through, recorded with the
+token's name; apt saw the new version; a reload that changed the age
+restarted only that source. Not seen on a real forge yet: a release
+ageing past the gate on its own, a pulled release, lookups by ID, and
+Forgejo or GitLab. Supply-chain protection: a synced release is published only
 once it is old enough, so a compromised release has time to be noticed and
 pulled first.
 
