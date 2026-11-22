@@ -411,6 +411,11 @@ func (p *Publisher) history(ctx context.Context, cfg *config.Config) ([]string, 
 // entries are fsynced before it returns: indexes that list them become
 // current with the swap, and nothing would recreate a lost link.
 func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
+	// Created even without packages: the pool links in public/ and in the
+	// snapshot point here and must resolve.
+	if err := os.MkdirAll(p.poolDir(fm.Name()), 0o755); err != nil {
+		return fmt.Errorf("pool: %w", err)
+	}
 	var dirs fsutil.DirSync
 	for _, pk := range pkgs {
 		src, err := p.Blobs.Path(pk.ServedSHA256())

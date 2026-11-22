@@ -311,3 +311,13 @@ func TestVerifyRPM(t *testing.T) {
 		})
 	}
 }
+
+// A format without packages still gets its pool directory, so the pool
+// links of public/ and the snapshot resolve.
+func TestVerifyPublishWithoutPackages(t *testing.T) {
+	f := newFixture(t)
+	f.publish(t)
+	if rep := f.verify(t); len(rep.Problems) != 0 {
+		t.Fatalf("problems: %+v", rep.Problems)
+	}
+}
