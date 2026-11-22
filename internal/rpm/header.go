@@ -185,6 +185,11 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 		default:
 			continue
 		}
+		// rpm finds a tag by binary search, so with two copies it may read
+		// a different one than garner would.
+		if _, dup := tags[tag]; dup {
+			return 0, nil, fmt.Errorf("tag %d: duplicate entry", tag)
+		}
 		if uint64(off) >= uint64(len(data)) {
 			return 0, nil, fmt.Errorf("tag %d: offset out of range", tag)
 		}
@@ -209,17 +214,24 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 			tags[tag] = names
 		case tag == tagObsoletes:
 			return 0, nil, fmt.Errorf("tag %d: type %d, want a string array", tag, typ)
-		case typ == typeString, typ == typeI18NString, typ == typeStringArray:
+		case tag == tagEpoch:
+			if typ != typeInt32 || count != 1 {
+				return 0, nil, fmt.Errorf("tag %d: type %d count %d, want one int32", tag, typ, count)
+			}
+			if uint64(off)+4 > uint64(len(data)) {
+				return 0, nil, fmt.Errorf("tag %d: bad int32", tag)
+			}
+			tags[tag] = int32(binary.BigEndian.Uint32(data[off : off+4]))
+		// Only the summary may be an I18N string: rpm picks one of its
+		// values by locale, and garner reads the first.
+		case typ == typeString, tag == tagSummary && typ == typeI18NString:
 			end := bytes.IndexByte(data[off:], 0)
 			if end < 0 {
 				return 0, nil, fmt.Errorf("tag %d: unterminated string", tag)
 			}
 			tags[tag] = string(data[off : off+uint32(end)])
-		case typ == typeInt32:
-			if count < 1 || uint64(off)+4 > uint64(len(data)) {
-				return 0, nil, fmt.Errorf("tag %d: bad int32", tag)
-			}
-			tags[tag] = int32(binary.BigEndian.Uint32(data[off : off+4]))
+		default:
+			return 0, nil, fmt.Errorf("tag %d: type %d, want a string", tag, typ)
 		}
 	}
 	return total, tags, nil

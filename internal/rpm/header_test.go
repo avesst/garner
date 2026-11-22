@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -115,9 +116,88 @@ func TestReadHeaderFieldCharacters(t *testing.T) {
 	}
 }
 
+// A tag that appears twice could be read one way by garner and another by
+// rpm, which picks a copy by binary search, so the name garner checks for
+// ownership could differ from the one in the signed repodata.
+func TestReadHeaderDuplicateTag(t *testing.T) {
+	entries := []fakeEntry{
+		{tagName, typeString, "bash"},
+		{tagName, typeString, "foo"},
+		{tagVersion, typeString, "1.0"},
+		{tagRelease, typeString, "1"},
+		{tagArch, typeString, "noarch"},
+		{tagSourceRPM, typeString, "foo-1.0-1.src.rpm"},
+	}
+	p, err := ReadHeader(bytes.NewReader(fakeRPMEntries(entries)))
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("got %+v, err = %v, want a duplicate tag error", p, err)
+	}
+}
+
+// The tags that identify a package must have the type rpmbuild writes:
+// rpm picks an I18N string by locale, so garner could read another value.
+func TestReadHeaderTagTypes(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry fakeEntry
+		want  string // empty: accepted
+	}{
+		{"summary as i18n string", fakeEntry{tagSummary, typeI18NString, "hello"}, ""},
+		{"epoch as int32", fakeEntry{tagEpoch, typeInt32, "5"}, ""},
+		{"name as i18n string", fakeEntry{tagName, typeI18NString, "foo"}, "type"},
+		{"name as string array", fakeEntry{tagName, typeStringArray, "foo"}, "type"},
+		{"arch as i18n string", fakeEntry{tagArch, typeI18NString, "noarch"}, "type"},
+		{"epoch as string", fakeEntry{tagEpoch, typeString, "5"}, "type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []fakeEntry{
+				{tagName, typeString, "foo"},
+				{tagVersion, typeString, "1.0"},
+				{tagRelease, typeString, "1"},
+				{tagArch, typeString, "noarch"},
+				{tagSourceRPM, typeString, "foo-1.0-1.src.rpm"},
+			}
+			replaced := false
+			for i := range entries {
+				if entries[i].tag == tt.entry.tag {
+					entries[i], replaced = tt.entry, true
+				}
+			}
+			if !replaced {
+				entries = append(entries, tt.entry)
+			}
+			p, err := ReadHeader(bytes.NewReader(fakeRPMEntries(entries)))
+			if tt.want == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Errorf("got %+v, err = %v, want it to contain %q", p, err, tt.want)
+			}
+		})
+	}
+}
+
 // fakeRPM returns a binary rpm with an empty signature header and a main
 // header holding the given string tags.
 func fakeRPM(tags map[int32]string) []byte {
+	var entries []fakeEntry
+	for tag, v := range tags {
+		entries = append(entries, fakeEntry{tag, typeString, v})
+	}
+	return fakeRPMEntries(entries)
+}
+
+// fakeEntry is one main-header index entry with a single value: a string,
+// or for typeInt32 a decimal number.
+type fakeEntry struct {
+	tag   int32
+	typ   uint32
+	value string
+}
+
+// fakeRPMEntries is fakeRPM with the main header index given in order.
+func fakeRPMEntries(entries []fakeEntry) []byte {
 	var b bytes.Buffer
 	lead := make([]byte, 96)
 	copy(lead, leadMagic)
@@ -132,12 +212,25 @@ func fakeRPM(tags map[int32]string) []byte {
 	}
 	header(nil, nil) // 16 bytes, so no padding follows
 	var index, data []byte
-	for tag, v := range tags {
-		index = binary.BigEndian.AppendUint32(index, uint32(tag))
-		index = binary.BigEndian.AppendUint32(index, typeString)
+	for _, e := range entries {
+		if e.typ == typeInt32 {
+			for len(data)%4 != 0 {
+				data = append(data, 0)
+			}
+		}
+		index = binary.BigEndian.AppendUint32(index, uint32(e.tag))
+		index = binary.BigEndian.AppendUint32(index, e.typ)
 		index = binary.BigEndian.AppendUint32(index, uint32(len(data)))
 		index = binary.BigEndian.AppendUint32(index, 1)
-		data = append(append(data, v...), 0)
+		if e.typ == typeInt32 {
+			n, err := strconv.ParseInt(e.value, 10, 32)
+			if err != nil {
+				panic(err)
+			}
+			data = binary.BigEndian.AppendUint32(data, uint32(n))
+		} else {
+			data = append(append(data, e.value...), 0)
+		}
 	}
 	header(index, data)
 	return b.Bytes()
