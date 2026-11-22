@@ -369,7 +369,7 @@ type debMember struct {
 
 // buildDeb returns a .deb with debian-binary, the given members, and an
 // empty data.tar unless the members include a data member.
-func buildDeb(t *testing.T, members ...debMember) []byte {
+func buildDeb(t testing.TB, members ...debMember) []byte {
 	t.Helper()
 	all := []debMember{{"debian-binary", []byte("2.0\n")}}
 	all = append(all, members...)
@@ -383,7 +383,7 @@ func buildDeb(t *testing.T, members ...debMember) []byte {
 	return rawAr(t, all...)
 }
 
-func rawAr(t *testing.T, members ...debMember) []byte {
+func rawAr(t testing.TB, members ...debMember) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	b.WriteString("!<arch>\n")
@@ -397,13 +397,13 @@ func rawAr(t *testing.T, members ...debMember) []byte {
 	return b.Bytes()
 }
 
-func controlTar(t *testing.T, name, content string) []byte {
+func controlTar(t testing.TB, name, content string) []byte {
 	t.Helper()
 	return tarFiles(t, name, content)
 }
 
 // tarFiles returns a tar with one regular file per name and content pair.
-func tarFiles(t *testing.T, nameContent ...string) []byte {
+func tarFiles(t testing.TB, nameContent ...string) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	tw := tar.NewWriter(&b)
@@ -446,7 +446,7 @@ func tarEntries(t *testing.T, entries ...tarEntry) []byte {
 	return b.Bytes()
 }
 
-func compress(t *testing.T, suffix string, data []byte) []byte {
+func compress(t testing.TB, suffix string, data []byte) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	var w io.WriteCloser
