@@ -1,8 +1,14 @@
 name: ci
 
+# Skipped when only Markdown changes: no job reads it. The man pages in
+# docs/ are not Markdown and still run the packages job.
 on:
   push:
+    paths-ignore:
+      - "**.md"
   pull_request:
+    paths-ignore:
+      - "**.md"
 
 permissions:
   contents: read
