@@ -174,7 +174,7 @@ pulled first.
 | Default deployment | 0.1.0 | Proxy serves `public/`; README "Put it behind a reverse proxy" |
 | Backup and restore; rpm `Signer` limit (rpm re-signing needs an exportable key, so no HSM/KMS for rpm) | 1.0.0 | Document |
 | `Valid-Until` in `InRelease`, so apt detects metadata frozen by an attacker | After 0.1.0 | Candidate. Needs a periodic re-sign and publish even when nothing changed, and an expiry window longer than that period. deb only; rpm has no equivalent |
-| i686 rpms (multilib): published as their own `rpm/<release>/i686` repository, which x86_64 clients do not read, while Fedora and EL ship multilib packages in the x86_64 repository | Before relying on i686 | Open; found with the test host corpus |
+| i686 rpms (multilib): published as their own `rpm/<release>/i686` repository, which x86_64 clients do not read, while Fedora and EL ship multilib packages in the x86_64 repository | Before relying on i686 | Done: i686 packages are listed in the x86_64 repository and i686 needs x86_64 configured; dnf installs both architectures side by side in AlmaLinux 10 and Fedora 44 (`just e2e`). deb is unchanged: garner publishes `binary-i386` for apt multiarch, which no test covers yet |
 | License | Before the first public release | 0BSD (`LICENSE`), also shipped in the packages |
 
 ## Dependencies to approve

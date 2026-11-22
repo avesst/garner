@@ -161,6 +161,11 @@ Signed-By: /usr/share/keyrings/garner.gpg
 - Releases come from configuration; the default is only `stable`.
 - `noarch` packages are included in each architecture's repodata; the file is
   stored once.
+- `i686` is multilib only: with `i686` and `x86_64` configured, the x86_64
+  repository also lists the i686 packages, as Fedora and EL ship them, and
+  there is no `i686` repository. dnf on an x86_64 host reads only the
+  x86_64 one (`$basearch`), and no supported host runs i686. Configuring
+  `i686` requires `x86_64`.
 - `location href` in `primary.xml` is `pool/<prefix>/<hash>/<file>`, with
   `<hash>` as for deb, taken from the re-signed file that is served. Each
   `/rpm/<release>/<basearch>/pool` resolves to the shared rpm pool, so dnf

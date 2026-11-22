@@ -55,6 +55,11 @@ func (c *Config) Validate() error {
 	}
 	if c.RPM != nil {
 		validateList(&p, "rpm.architectures", c.RPM.Architectures, reRPMArch, "noarch")
+		// No x86_64 or EL host runs i686: i686 packages are multilib, served
+		// from the x86_64 repository.
+		if slices.Contains(c.RPM.Architectures, "i686") && !slices.Contains(c.RPM.Architectures, "x86_64") {
+			p.add("rpm.architectures", "i686 packages are published in the x86_64 repository (multilib), so x86_64 must be listed too")
+		}
 		validateList(&p, "rpm.releases", c.RPM.Releases, reDistribution, "")
 	}
 	validateSettings(&p, "defaults", Settings{Retention: c.Defaults.Retention,

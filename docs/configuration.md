@@ -116,7 +116,7 @@ of a disabled format are rejected.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `architectures` | list | `[x86_64]` | rpm architectures to publish. Lowercase letters, digits and `_`. Don't list `noarch`; it is implicit, as `all` is for deb. |
+| `architectures` | list | `[x86_64]` | rpm architectures to publish. Lowercase letters, digits and `_`. Don't list `noarch`; it is implicit, as `all` is for deb. `i686` is multilib: its packages are listed in the x86_64 repository, where dnf on x86_64 hosts finds them, so it requires `x86_64` and gets no repository of its own. |
 | `releases` | list | `[stable]` | Releases to publish. Same rules and default handling as `deb.suites`. |
 
 ## `defaults`

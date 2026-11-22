@@ -295,6 +295,12 @@ Don't list
 it is implicit, as
 .B all
 is for deb.
+.B i686
+is multilib: its packages are listed in the
+.B x86_64
+repository, where dnf on x86_64 hosts finds them, so it requires
+.B x86_64
+and gets no repository of its own.
 .TP
 .BR releases " (\fIlist\fR, default " [stable] )
 Releases to publish.

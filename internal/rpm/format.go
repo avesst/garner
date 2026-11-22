@@ -164,7 +164,7 @@ func copyFile(src, dst string) error {
 func (*Format) Links(c *config.Config) []format.Link {
 	var out []format.Link
 	for _, rel := range c.RPM.Releases {
-		for _, arch := range c.RPM.Architectures {
+		for _, arch := range repoArches(c) {
 			dir := path.Join("rpm", rel, arch)
 			out = append(out,
 				format.Link{Path: dir + "/repodata", Target: "../../../current/rpm/" + rel + "/" + arch + "/repodata"},
@@ -202,7 +202,7 @@ gpgkey=%[2]s/key.asc
 func (f *Format) Render(ctx context.Context, r *format.RenderRequest) error {
 	c := r.Config
 	for _, rel := range c.RPM.Releases {
-		for _, arch := range c.RPM.Architectures {
+		for _, arch := range repoArches(c) {
 			out := filepath.Join(r.Dir, rel, arch)
 			if err := f.renderRepo(ctx, r, rel, arch, out); err != nil {
 				return fmt.Errorf("%s/%s: %w", rel, arch, err)
@@ -221,7 +221,7 @@ func (f *Format) renderRepo(ctx context.Context, r *format.RenderRequest, rel, a
 		return err
 	}
 	for _, p := range r.Packages {
-		if p.Distribution != rel || (p.Arch != arch && p.Arch != "noarch") {
+		if p.Distribution != rel || !inRepo(r.Config, p.Arch, arch) {
 			continue
 		}
 		rp := filepath.FromSlash(f.PoolPath(p))

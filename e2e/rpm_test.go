@@ -222,3 +222,41 @@ func (e *containerEnv) rpmPoolFiles() []string {
 	}
 	return out
 }
+
+// i686 packages are multilib: dnf on x86_64 installs them next to the
+// x86_64 package of the same version, from the x86_64 repository.
+func TestDnfMultilib(t *testing.T) {
+	e := newContainerEnv(t)
+	e.writeConfigWith("deb:\n  suites: [stable]\nrpm:\n  architectures: [x86_64, i686]\n  releases: [stable]\n", "")
+	e.restart()
+	for _, f := range []string{"garner-hello-2.0-1.x86_64.rpm", "garner-hello-2.0-1.i686.rpm"} {
+		data, err := os.ReadFile(filepath.Join("..", "internal", "rpm", "testdata", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.api(http.MethodPut, "/api/v1/upload?release=stable", data)
+	}
+	e.api(http.MethodPost, "/api/v1/publish", nil)
+	if code := e.status("/rpm/stable/i686/repodata/repomd.xml"); code != http.StatusNotFound {
+		t.Errorf("an i686 repository is served: HTTP %d", code)
+	}
+	for _, image := range []string{"almalinux:10", "fedora:44"} {
+		t.Run(image, func(t *testing.T) {
+			script := fmt.Sprintf(`
+rm -f /etc/yum.repos.d/*.repo
+curl -fsSLo /etc/yum.repos.d/garner.repo %s/garner.repo
+dnf -y -q --setopt=install_weak_deps=0 install garner-hello.x86_64 garner-hello.i686
+rpm -q --qf '%%{NAME}-%%{EPOCH}:%%{VERSION}-%%{RELEASE}.%%{ARCH}\n' garner-hello | sort
+`, e.url)
+			out, err := exec.Command("docker", "run", "--rm", "--network", "host", image, "sh", "-ec", script).CombinedOutput()
+			if err != nil {
+				t.Fatalf("dnf failed: %v\n%s", err, out)
+			}
+			for _, want := range []string{"garner-hello-3:2.0-1.i686", "garner-hello-3:2.0-1.x86_64"} {
+				if !strings.Contains(string(out), want) {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}

@@ -79,7 +79,7 @@ type primary struct {
 func (f *Format) Verify(ctx context.Context, r *format.VerifyRequest) []format.Problem {
 	v := &rpmVerifier{r: r}
 	for _, rel := range r.Config.RPM.Releases {
-		for _, arch := range r.Config.RPM.Architectures {
+		for _, arch := range repoArches(r.Config) {
 			if ctx.Err() != nil {
 				v.errorf("cancelled", r.Dir, "%v", ctx.Err())
 				return v.problems
@@ -178,7 +178,7 @@ func (v *rpmVerifier) primary(rel, arch, repo string, data []byte) {
 	}
 	want := map[string]*format.Package{}
 	for _, pk := range v.r.Packages {
-		if pk.Distribution == rel && (pk.Arch == arch || pk.Arch == "noarch") {
+		if pk.Distribution == rel && inRepo(v.r.Config, pk.Arch, arch) {
 			want["pool/"+(&Format{}).PoolPath(pk)] = pk
 		}
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func rpmFixture(t *testing.T) *fixture {
 	}
 	reg, _ := format.NewRegistry(deb.Format{}, rf)
 	f.in.Formats, f.pub.Formats = reg, reg
-	f.cfg.RPM.Architectures = []string{"x86_64", "aarch64"}
+	f.cfg.RPM.Architectures = []string{"x86_64", "i686", "aarch64"}
 	addRPM := func(name string) {
 		data, err := os.ReadFile(filepath.Join("..", "rpm", "testdata", name))
 		if err != nil {
@@ -241,6 +242,7 @@ func rpmFixture(t *testing.T) *fixture {
 	}
 	addRPM("garner-hello-1.0-1.noarch.rpm")
 	addRPM("garner-hello-2.0-1.x86_64.rpm")
+	addRPM("garner-hello-2.0-1.i686.rpm")
 	f.add(t, "app", "1.0", "amd64")
 	f.publish(t)
 	// A second snapshot with other repodata, so it carries history.
@@ -319,5 +321,39 @@ func TestVerifyPublishWithoutPackages(t *testing.T) {
 	f.publish(t)
 	if rep := f.verify(t); len(rep.Problems) != 0 {
 		t.Fatalf("problems: %+v", rep.Problems)
+	}
+}
+
+// i686 packages are multilib: listed in the x86_64 repository, with no
+// repository of their own, which no host would read.
+func TestRPMMultilib(t *testing.T) {
+	f := rpmFixture(t)
+	cur, _ := f.pub.Store.CurrentSnapshot(context.Background())
+	rel := filepath.Join(f.root, "snapshots", cur.ID, "rpm", "stable")
+	// The current primary, not one carried over as history.
+	md, _ := os.ReadFile(filepath.Join(rel, "x86_64", "repodata", "repomd.xml"))
+	m := regexp.MustCompile(`href="(repodata/[^"]*-primary\.xml\.zst)"`).FindSubmatch(md)
+	if m == nil {
+		t.Fatalf("no primary in repomd.xml:\n%s", md)
+	}
+	out, err := exec.Command("zstd", "-dc", filepath.Join(rel, "x86_64", string(m[1]))).Output()
+	if err != nil {
+		t.Skipf("zstd: %v", err)
+	}
+	for _, want := range []string{"<arch>x86_64</arch>", "<arch>i686</arch>", "<arch>noarch</arch>"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("x86_64 primary lacks %s", want)
+		}
+	}
+	for _, dir := range []string{filepath.Join(rel, "i686"), filepath.Join(f.root, "public", "rpm", "stable", "i686")} {
+		if _, err := os.Lstat(dir); err == nil {
+			t.Errorf("%s exists; i686 has no repository of its own", dir)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(rel, "aarch64", "repodata", "repomd.xml")); err != nil {
+		t.Errorf("aarch64 keeps its repository: %v", err)
+	}
+	if rep := f.verify(t); len(rep.Problems) != 0 {
+		t.Errorf("problems: %+v", rep.Problems)
 	}
 }

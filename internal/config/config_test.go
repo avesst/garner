@@ -118,6 +118,7 @@ func TestInvalid(t *testing.T) {
 		{"relative sqlite", minimal + "database:\n  url: sqlite://garner.db\n", []string{"three slashes"}},
 		{"bad proxy", minimal + "  trusted_proxies: [\"10.0.0.0/33\"]\n", []string{"server.trusted_proxies[0]"}},
 		{"arch all", serverOnly + "deb:\n  architectures: [amd64, all]\n", []string{`"all" is implicit`}},
+		{"i686 without x86_64", serverOnly + "rpm:\n  architectures: [i686]\n", []string{"x86_64 must be listed too"}},
 		{"duplicate suite", serverOnly + "deb:\n  suites: [stable, stable]\n", []string{"listed twice"}},
 		{"bad enum", minimal + "defaults:\n  verify: sometimes\n", []string{"defaults.verify"}},
 		{"negative min_release_age", minimal + "defaults:\n  min_release_age: -1h\n", []string{"defaults.min_release_age: must not be negative"}},
