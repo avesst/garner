@@ -93,6 +93,7 @@ sources:
     prereleases: true           # also sync releases marked pre-release
     verify: required            # reject assets without a checksum
     checksums: ["SHA256SUMS"]
+    min_release_age: 72h        # publish a release once it is 3 days old
     assets:
       - match: "*-beta*"
         suite: testing
@@ -117,8 +118,11 @@ Each asset is checked against the forge's digest or the release's checksum
 file when one exists, and rejected on a mismatch. Asset rules decide which
 suite or release an asset goes to. A source can reserve package names
 (`owns`) so that only it may deliver them, and with `approval: manual` new
-packages wait for `garner approve`. `garner sync <source>` polls a source
-right away.
+packages wait for `garner approve`. With `min_release_age`, a release is
+published only once it is that old, so a compromised release has time to
+be noticed and pulled first; `garner sync <source> --ignore-age <tag>`
+lets an urgent fix through. `garner sync <source>` polls a source right
+away.
 
 Every poll is a few API requests, and forges limit how many they accept.
 Give each forge a token: it is required for private repositories, and on
