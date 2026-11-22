@@ -118,3 +118,63 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestMatchAgreesWithPathMatch checks Match against path.Match on names
+// without '/', where the two must agree.
+func TestMatchAgreesWithPathMatch(t *testing.T) {
+	patterns := append(allStrings("ab*?", 3), "[a-b]*", "[^a]?", `a\*`, "*b*")
+	for _, p := range patterns {
+		for _, n := range allStrings("abc", 4) {
+			want, _ := path.Match(p, n)
+			if got := Match(p, n); got != want {
+				t.Errorf("Match(%q, %q) = %v, path.Match says %v", p, n, got, want)
+			}
+		}
+	}
+}
+
+func TestMatchSlash(t *testing.T) {
+	tests := []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"team/*", "team/tool", true},
+		{"team/*", "team/tools/cli", true},
+		{"team/*", "team", false},
+		{"team/*", "other/tool", false},
+		{"*", "a/b", true},
+		{"a?b", "a/b", true},
+		{"tool", "tool/x", false},
+		{"[", "[", false}, // invalid pattern
+	}
+	for _, tt := range tests {
+		if got := Match(tt.pattern, tt.name); got != tt.want {
+			t.Errorf("Match(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
+		}
+	}
+}
+
+// TestOverlapAgreesWithMatch brute-forces Overlap against Match over an
+// alphabet with '/', so validation and ingest decide ownership alike.
+func TestOverlapAgreesWithMatch(t *testing.T) {
+	patterns := allStrings("a/*?", 3)
+	names := allStrings("a/b", 6)
+	for _, a := range patterns {
+		for _, b := range patterns {
+			want := false
+			for _, n := range names {
+				if Match(a, n) && Match(b, n) {
+					want = true
+					break
+				}
+			}
+			ex, got, _ := Overlap(a, b)
+			if got != want {
+				t.Errorf("Overlap(%q, %q) = %v, brute force says %v", a, b, got, want)
+			}
+			if got && (!Match(a, ex) || !Match(b, ex)) {
+				t.Errorf("Overlap(%q, %q) example %q does not match both", a, b, ex)
+			}
+		}
+	}
+}

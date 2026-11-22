@@ -295,3 +295,8 @@ func carryRepodata(oldDir, newDir string) error {
 	}
 	return nil
 }
+
+// Presentation puts rpm under Linux packages on the landing page.
+func (*Format) Presentation() format.Presentation {
+	return format.Presentation{Ecosystem: "Linux packages", Label: "Fedora / RHEL", Tool: "dnf", Signed: true}
+}

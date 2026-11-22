@@ -1,8 +1,8 @@
 # garner
 
-garner sets up package repositories for your organization or homelab and
-fills them with the releases published on your forges, by your own projects
-and the ones you depend on.
+garner sets up repositories for packages and container images for your
+organization or homelab, and fills them with the releases published on your
+forges and registries, by your own projects and the ones you depend on.
 
 **Repositories that are easy to set up.** garner is one static binary, using
 SQLite and local disk, configured by one YAML file that fits a GitOps
@@ -16,8 +16,13 @@ repositories or whole organizations and groups, and publishes their `.deb`
 and `.rpm` assets on its own. Packages can also be uploaded directly,
 typically from CI pipelines.
 
-garner serves apt and dnf repositories. It does not mirror distributions or
-build packages from source.
+**Container images too.** With the `oci` section, garner is also a
+registry: CI pushes with `docker push`, hosts pull with `docker pull`, and
+images can be synced from ghcr.io, Docker Hub or a GitLab registry like
+releases are from forges.
+
+garner serves apt and dnf repositories and container images. It does not
+mirror distributions or build packages from source.
 
 > [!WARNING]
 > garner is under active development and is not ready for internet-facing
@@ -133,6 +138,53 @@ and garner's requests for releases that have not changed do not count
 against GitHub's limit when they carry a token. The metric
 `garner_forge_ratelimit_remaining` shows how much quota is left.
 
+### Container images
+
+With an `oci` section, garner is a registry at `/v2/` on its host. Push
+with a token that has the `upload` scope, its name as the user and its
+secret as the password:
+
+```sh
+echo "$SECRET" | docker login pkg.example.com -u ci-mytool --password-stdin
+docker push pkg.example.com/team/mytool:1.2.0
+```
+
+Pulls need no login. A pushed tag can be pulled after the next publish, a
+few seconds later. Names are owned like package names, so the first push
+of `team/mytool` makes the token's owner its owner. Images can also be
+synced from other registries:
+
+```yaml
+oci: {}
+
+registries:
+  - name: ghcr
+    url: https://ghcr.io
+    username: example-bot
+    token_env: GHCR_TOKEN       # a token with read:packages
+  - name: dockerhub
+    url: https://registry-1.docker.io
+    auth_hosts: [auth.docker.io]
+
+sources:
+  - name: mytool-image
+    registry: ghcr
+    image: example-org/mytool
+    tags: ["v*"]
+    as: team/mytool             # the name garner serves it under
+  - name: alpine
+    registry: dockerhub
+    image: library/alpine
+    tags: ["3.22", "3.22.*"]
+    min_release_age: 72h
+```
+
+Tags move when they move upstream, and the digest they pointed at stays
+pullable until `oci.retention` ages it out, so deployments that pin
+digests keep working. garner does not sign images; cosign signatures
+pushed as tags (`sha256-<digest>.sig`) are stored and served like any
+other tag.
+
 ## Signing and publishing
 
 garner signs everything with one key, so clients trust the repository and
@@ -210,8 +262,9 @@ sudo systemctl enable --now garner
 `init` creates storage, the database, a signing key (when none is configured)
 and an admin token. The token is printed once.
 
-Client setup instructions for apt and dnf are on the landing page at
-`public_url`.
+Client setup instructions for apt and dnf, and for pulling and pushing
+images, are on the landing page at `public_url`, with a tab per ecosystem
+that also lists every package or image, filterable and a page at a time.
 
 ### Put it behind a reverse proxy
 
@@ -250,11 +303,19 @@ sudo usermod -aG garner caddy      # or www-data for nginx on Debian
 sudo systemctl restart caddy
 ```
 
+With the `oci` section, also pass `/v2/` to garner: image pushes and the
+registry's headers need it. Image pulls then pause while garner restarts;
+under systemd the listening socket stays open, so they wait rather than
+fail.
+
 Caddy:
 
 ```caddyfile
 pkg.example.com {
 	handle /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /v2/* {
 		reverse_proxy 127.0.0.1:8080
 	}
 	handle {
@@ -280,6 +341,15 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
         client_max_body_size 2g;          # storage.max_package_size
         proxy_request_buffering off;
+    }
+
+    location /v2/ {                       # with the oci section
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 0;           # garner limits each blob
+        proxy_request_buffering off;
+        proxy_buffering off;
     }
 }
 ```

@@ -1,4 +1,5 @@
-// Command garner serves an internal deb and rpm package repository.
+// Command garner serves an internal repository for packages and container
+// images.
 package main
 
 import (

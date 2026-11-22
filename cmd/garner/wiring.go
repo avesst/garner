@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"path/filepath"
 
 	"github.com/avesst/garner/internal/app"
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
+	"github.com/avesst/garner/internal/oci"
 	"github.com/avesst/garner/internal/rpm"
+	"github.com/avesst/garner/internal/server"
 	"github.com/avesst/garner/internal/signing"
 	gsync "github.com/avesst/garner/internal/sync"
 )
@@ -30,8 +33,24 @@ func formats(signer func() signing.Signer) app.FormatsFunc {
 			}
 			out = append(out, f)
 		}
+		if cfg.OCI != nil {
+			out = append(out, oci.Format{})
+		}
 		return out, nil
 	}
+}
+
+// attachLive gives formats with live endpoints their handlers: the OCI
+// registry at /v2/ (section 19).
+func attachLive(a *app.App) error {
+	if a.Config().OCI == nil {
+		return nil
+	}
+	reg := &oci.Registry{Store: a.Store, Blobs: a.Blobs, Ingester: a.Ingester, Config: a.Config,
+		Root: a.Config().Storage.Path, Log: a.Log}
+	a.Live = map[string]http.Handler{oci.Prefix: reg}
+	a.Publisher.Collect = append(a.Publisher.Collect, reg.CollectUploads)
+	return server.CheckLive([]string{oci.Prefix})
 }
 
 var syncManager *gsync.Manager
@@ -43,6 +62,9 @@ func startSync(a *app.App) error {
 	syncManager = &gsync.Manager{
 		Store: a.Store, Ingester: a.Ingester, Formats: a.Formats, Config: a.Config,
 		TmpDir: filepath.Join(cfg.Storage.Path, "tmp"), Log: a.Log,
+	}
+	if cfg.OCI != nil {
+		syncManager.Images = &oci.Syncer{Store: a.Store, Blobs: a.Blobs, Ingester: a.Ingester}
 	}
 	syncManager.RegisterMetrics(a.Metrics)
 	a.Syncer = syncManager

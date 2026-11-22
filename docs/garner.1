@@ -1,14 +1,30 @@
 .TH GARNER 1 "" "garner" "User Commands"
 .SH NAME
-garner \- internal deb and rpm package repository
+garner \- internal repository for packages and container images
 .SH SYNOPSIS
 .B garner
 .I command
 .RI [ arguments ]
 .SH DESCRIPTION
 .B garner
-serves signed apt and dnf repositories from uploaded packages and from
+is an internal repository for packages and container images.
+It serves signed apt and dnf repositories from uploaded packages and from
 releases synced from GitHub, GitLab and Forgejo/Gitea.
+With the
+.B oci
+section configured it is also a container registry at
+.IR /v2/ ,
+which
+.B docker push
+and
+.B docker pull
+use, and syncs images from other registries; see
+.BR garner.yaml (5).
+Images are removed with
+.B remove
+like packages, by name and, as
+.BR \-\-version ,
+their digest.
 .PP
 Local commands run on the host that holds the configuration and the
 database.

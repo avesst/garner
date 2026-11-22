@@ -29,7 +29,7 @@ vet:
 test:
     go test ./...
 
-# Real apt and dnf clients in containers; needs Docker and network access.
+# Real apt, dnf and container clients; needs Docker and network access.
 e2e:
     go test -tags e2e -count=1 -v ./e2e
 

@@ -42,6 +42,10 @@ type Publisher struct {
 	Build string
 	Root  string
 	Log   *slog.Logger
+	// Collect are further collections GC runs, such as abandoned uploads.
+	Collect []func(context.Context) error
+	// Now is GC's clock for staged blobs; tests replace it.
+	Now func() time.Time
 
 	// mu allows one publish at a time. With multiple nodes this becomes a
 	// database lock held by the leader (section 18).
@@ -64,7 +68,11 @@ func (p *Publisher) Publish(ctx context.Context) (*store.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	keep, drop := p.retain(cfg, active)
+	tags, err := p.Store.Tags(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keep, drop := p.retain(cfg, active, tags)
 	if len(drop) > 0 {
 		err := p.Store.Tx(ctx, func(q *store.Queries) error {
 			for _, d := range drop {
@@ -82,7 +90,7 @@ func (p *Publisher) Publish(ctx context.Context) (*store.Snapshot, error) {
 				"version", d.Version, "arch", d.Arch, "distribution", d.Distribution)
 		}
 	}
-	return p.publish(ctx, cfg, keep)
+	return p.publish(ctx, cfg, keep, tags)
 }
 
 // Stale reports whether a publish would render something other than the
@@ -109,8 +117,12 @@ func (p *Publisher) stale(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	keep, _ := p.retain(cfg, active)
-	inputs, err := p.inputs(cfg, p.Signer(), keep)
+	tags, err := p.Store.Tags(ctx)
+	if err != nil {
+		return false, err
+	}
+	keep, _ := p.retain(cfg, active, tags)
+	inputs, err := p.inputs(cfg, p.Signer(), keep, servedTags(keep, tags))
 	if err != nil {
 		return false, err
 	}
@@ -119,8 +131,8 @@ func (p *Publisher) stale(ctx context.Context) (bool, error) {
 
 // inputs digests what a snapshot is rendered from, apart from the time:
 // garner's version and build, the configuration and its commit, the
-// enabled formats, the signing keys and the package set.
-func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*format.Package) (string, error) {
+// enabled formats, the signing keys, the package set and its tags.
+func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*format.Package, tags []format.Tag) (string, error) {
 	h := sha256.New()
 	commit := ""
 	if p.ConfigCommit != nil {
@@ -140,11 +152,30 @@ func (p *Publisher) inputs(cfg *config.Config, signer signing.Signer, pkgs []*fo
 	for i, pk := range pkgs {
 		entries[i] = fmt.Sprintf("package %q %q\n", pk.ID, pk.Distribution)
 	}
+	for _, t := range tags {
+		entries = append(entries, fmt.Sprintf("tag %q %q %q %q\n", t.Format, t.Name, t.Tag, t.PackageID))
+	}
 	slices.Sort(entries)
 	for _, e := range entries {
 		io.WriteString(h, e)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// servedTags returns the tags on pkgs: a snapshot serves no tag whose
+// package it does not serve.
+func servedTags(pkgs []*format.Package, tags []format.Tag) []format.Tag {
+	ids := map[string]bool{}
+	for _, pk := range pkgs {
+		ids[pk.ID] = true
+	}
+	var out []format.Tag
+	for _, t := range tags {
+		if ids[t.PackageID] {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Rollback publishes a new snapshot with the package set of snapshot id.
@@ -173,6 +204,10 @@ func (p *Publisher) Rollback(ctx context.Context, snapshotID string) (*store.Sna
 		want[e] = true
 	}
 	rendered, err := p.Store.SnapshotFormats(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	snapTags, err := p.Store.SnapshotTags(ctx, snapshotID)
 	if err != nil {
 		return nil, err
 	}
@@ -210,20 +245,31 @@ func (p *Publisher) Rollback(ctx context.Context, snapshotID string) (*store.Sna
 				}
 			}
 		}
-		return nil
+		// Tags move back with the packages, in the formats the snapshot
+		// rendered.
+		return q.ReplaceTags(ctx, rendered, snapTags, "rollback:"+snapshotID)
 	})
 	if err != nil {
 		return nil, err
 	}
+	tags, err := p.Store.Tags(ctx)
+	if err != nil {
+		return nil, err
+	}
 	p.Log.Info("rolling back", "to", snapshotID, "packages", len(pkgs))
-	return p.publish(ctx, cfg, pkgs)
+	return p.publish(ctx, cfg, pkgs, tags)
 }
 
 // retain applies package retention: per format, name, distribution and
-// architecture, keep the newest N versions plus pinned packages (section
-// 9). N is the delivering source's retention, or defaults.retention; zero
-// or less keeps everything.
-func (p *Publisher) retain(cfg *config.Config, pkgs []*format.Package) (keep, drop []*format.Package) {
+// architecture, keep the newest N versions plus pinned and tagged packages
+// (sections 9 and 19). Tagged packages do not count towards N. N is the
+// delivering source's retention, or the format's (RetentionDefaulter), or
+// defaults.retention; zero or less keeps everything.
+func (p *Publisher) retain(cfg *config.Config, pkgs []*format.Package, tags []format.Tag) (keep, drop []*format.Package) {
+	tagged := map[string]bool{}
+	for _, t := range tags {
+		tagged[t.PackageID] = true
+	}
 	type key struct{ format, name, dist, arch string }
 	groups := map[key][]*format.Package{}
 	var order []key
@@ -245,37 +291,61 @@ func (p *Publisher) retain(cfg *config.Config, pkgs []*format.Package) (keep, dr
 		slices.SortStableFunc(g, func(a, b *format.Package) int { return fm.Compare(b, a) })
 		n := 0
 		for _, pk := range g {
-			if r := retentionFor(cfg, pk); r > n {
+			if r := retentionFor(cfg, fm, pk); r > n {
 				n = r
 			}
 		}
-		for i, pk := range g {
+		i := 0
+		for _, pk := range g {
+			if tagged[pk.ID] {
+				keep = append(keep, pk)
+				continue
+			}
 			if n <= 0 || i < n || pk.Pinned {
 				keep = append(keep, pk)
 			} else {
 				drop = append(drop, pk)
 			}
+			i++
 		}
 	}
 	return keep, drop
 }
 
-func retentionFor(cfg *config.Config, pk *format.Package) int {
+func retentionFor(cfg *config.Config, fm format.Format, pk *format.Package) int {
+	rd, hasDefault := fm.(format.RetentionDefaulter)
 	if pk.Origin == "source" {
 		name, _, _ := strings.Cut(pk.OriginRef, "/")
 		for _, s := range cfg.Sources {
-			if s.Name == name {
-				return cfg.Settings(s).Retention
+			if s.Name != name {
+				continue
 			}
+			// The format's own default comes before defaults.retention,
+			// which is about package versions.
+			if s.Retention == nil && hasDefault {
+				return rd.DefaultRetention(cfg)
+			}
+			return cfg.Settings(s).Retention
 		}
+	}
+	if hasDefault {
+		return rd.DefaultRetention(cfg)
 	}
 	return cfg.Defaults.Retention
 }
 
-func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*format.Package) (*store.Snapshot, error) {
+func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*format.Package, allTags []format.Tag) (*store.Snapshot, error) {
 	start := time.Now()
 	signer := p.Signer()
-	inputs, err := p.inputs(cfg, signer, pkgs)
+	tags := servedTags(pkgs, allTags)
+	owned, err := p.Store.PackageBlobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, pk := range pkgs {
+		pk.Blobs = owned[pk.ID]
+	}
+	inputs, err := p.inputs(cfg, signer, pkgs, tags)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +367,10 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 	for _, pk := range pkgs {
 		byFormat[pk.Format] = append(byFormat[pk.Format], pk)
 	}
+	tagsByFormat := map[string][]format.Tag{}
+	for _, t := range tags {
+		tagsByFormat[t.Format] = append(tagsByFormat[t.Format], t)
+	}
 	history, err := p.history(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -312,13 +386,13 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 		}
 		err := fm.Render(ctx, &format.RenderRequest{
 			Dir: filepath.Join(tmp, fm.Name()), Packages: fp, Config: cfg, Signer: signer,
-			PoolDir: p.poolDir(fm.Name()), History: hist,
+			PoolDir: p.poolDir(fm.Name()), History: hist, Tags: tagsByFormat[fm.Name()],
 		})
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", fm.Name(), err)
 		}
 	}
-	if err := p.writeRootFiles(tmp, cfg, signer, snap, pkgs); err != nil {
+	if err := p.writeRootFiles(tmp, cfg, signer, snap, pkgs, tags); err != nil {
 		return nil, err
 	}
 
@@ -329,7 +403,7 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 		return nil, err
 	}
 	ok = true
-	if err := p.activate(ctx, cfg, snap, pkgs); err != nil {
+	if err := p.activate(ctx, cfg, snap, pkgs, tags); err != nil {
 		// The publish may have failed because ctx was cancelled.
 		p.discard(context.WithoutCancel(ctx), snap.ID)
 		return nil, err
@@ -340,7 +414,7 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 }
 
 // activate records a rendered snapshot and makes it current.
-func (p *Publisher) activate(ctx context.Context, cfg *config.Config, snap *store.Snapshot, pkgs []*format.Package) error {
+func (p *Publisher) activate(ctx context.Context, cfg *config.Config, snap *store.Snapshot, pkgs []*format.Package, tags []format.Tag) error {
 	if err := fsutil.SyncDir(p.snapshotsDir()); err != nil {
 		return err
 	}
@@ -349,7 +423,7 @@ func (p *Publisher) activate(ctx context.Context, cfg *config.Config, snap *stor
 		entries[i] = store.SnapshotEntry{PackageID: pk.ID, Distribution: pk.Distribution, ServedSHA256: pk.ServedSHA256()}
 	}
 	if err := p.Store.Tx(ctx, func(q *store.Queries) error {
-		return q.InsertSnapshot(ctx, snap, entries)
+		return q.InsertSnapshot(ctx, snap, entries, tags)
 	}); err != nil {
 		return err
 	}
@@ -417,18 +491,33 @@ func (p *Publisher) linkPool(fm format.Format, pkgs []*format.Package) error {
 		return fmt.Errorf("pool: %w", err)
 	}
 	var dirs fsutil.DirSync
-	for _, pk := range pkgs {
-		src, err := p.Blobs.Path(pk.ServedSHA256())
+	link := func(sha, rel, name string) error {
+		src, err := p.Blobs.Path(sha)
 		if err != nil {
 			return err
 		}
-		rel := filepath.FromSlash(fm.PoolPath(pk))
+		rel = filepath.FromSlash(rel)
 		if !filepath.IsLocal(rel) {
-			return fmt.Errorf("pool: path %q of %s leaves the pool directory", rel, pk.Name)
+			return fmt.Errorf("pool: path %q of %s leaves the pool directory", rel, name)
 		}
 		dst := filepath.Join(p.poolDir(fm.Name()), rel)
 		if err := dirs.LinkOrCopy(src, dst); err != nil {
 			return fmt.Errorf("pool: %w", err)
+		}
+		return nil
+	}
+	bp, multi := fm.(format.BlobPooler)
+	for _, pk := range pkgs {
+		if err := link(pk.ServedSHA256(), fm.PoolPath(pk), pk.Name); err != nil {
+			return err
+		}
+		if !multi {
+			continue
+		}
+		for _, sha := range pk.Blobs {
+			if err := link(sha, bp.BlobPoolPath(sha), pk.Name); err != nil {
+				return err
+			}
 		}
 	}
 	if err := dirs.Sync(); err != nil {

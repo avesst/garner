@@ -71,6 +71,9 @@ func TestFormatSections(t *testing.T) {
 			return slices.Equal(c.RPM.Releases, []string{"el10"}) && slices.Equal(c.RPM.Architectures, []string{"x86_64"})
 		}},
 		{"both", serverOnly + "deb: {}\nrpm: {}\n", []string{"deb", "rpm"}, func(c *Config) bool { return true }},
+		{"bare oci", serverOnly + "oci:\n", []string{"oci"}, func(c *Config) bool {
+			return c.OCI.Retention == 10 && c.OCI.UploadExpiry == 24*time.Hour
+		}},
 		{"through a merge key", serverOnly + "<<: {deb: {suites: [main]}}\n", []string{"deb"}, func(c *Config) bool {
 			return slices.Equal(c.Deb.Suites, []string{"main"})
 		}},
@@ -135,6 +138,20 @@ func TestInvalid(t *testing.T) {
 		{"no format", serverOnly, []string{"no package format is configured"}},
 		{"suite without deb", serverOnly + "rpm: {}\nforges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", suite: stable}\n", []string{"sources[0].assets[0].suite: set, but deb is not configured"}},
 		{"release without rpm", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", release: stable}\n", []string{"sources[0].assets[0].release: set, but rpm is not configured"}},
+		{"oci retention", serverOnly + "oci:\n  retention: -1\n", []string{"oci.retention: must not be negative"}},
+		{"oci expiry", serverOnly + "oci:\n  upload_expiry: 10s\n", []string{"oci.upload_expiry"}},
+		{"registry over http", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"http://reg\"}\n", []string{"registries[0].url"}},
+		{"registry with path", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg/v2\"}\n", []string{"without a path"}},
+		{"username without token", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\", username: u}\n", []string{"needs token_env or token_file"}},
+		{"bad auth host", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\", auth_hosts: [\"https://x\"]}\n", []string{"auth_hosts[0]"}},
+		{"registry source without oci", minimal + "registries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: s, registry: r, image: a/b, tags: [\"*\"]}\n", []string{"need the oci section"}},
+		{"registry source without tags", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: s, registry: r, image: a/b}\n", []string{"sources[0].tags"}},
+		{"registry source with assets", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: s, registry: r, image: a/b, tags: [x], repo: a/b}\n", []string{"only apply to forge sources"}},
+		{"bad image", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: s, registry: r, image: A/B, tags: [x]}\n", []string{"sources[0].image"}},
+		{"reserved image name", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: s, registry: r, image: a/b, as: a/manifests, tags: [x]}\n", []string{"reserved component"}},
+		{"unknown registry", serverOnly + "oci: {}\nsources:\n  - {name: s, registry: r, image: a/b, tags: [x]}\n", []string{`unknown registry "r"`}},
+		{"forge and registry", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nforges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, registry: r, image: a/b, tags: [x]}\n", []string{"forge or registry, not both"}},
+		{"same local image name", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\"}\nsources:\n  - {name: a, registry: r, image: x/tool, as: tool, tags: [x]}\n  - {name: b, registry: r, image: y/tool, as: tool, tags: [x]}\n", []string{`sources[1]: serves its images as "tool", as source "a" does`}},
 		{"source override", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - {name: s, forge: gh, repo: a/b, retention: 0}\n", []string{"sources[0].retention"}},
 	}
 	for _, tt := range tests {
@@ -254,5 +271,26 @@ sources:
 	}
 	if d := Default().Defaults.MinReleaseAge; d != 0 {
 		t.Errorf("default min_release_age = %s, want 0s", d)
+	}
+}
+
+// Forge and registry sources reserve names in different namespaces, so
+// the same glob in both is no conflict; two registry sources still clash.
+func TestOwnsOverlapByKind(t *testing.T) {
+	base := minimal + `oci: {}
+forges:
+  - {name: gh, type: github}
+registries:
+  - {name: r, url: "https://reg"}
+sources:
+  - {name: tool, forge: gh, repo: a/tool, owns: ["tool"]}
+  - {name: image, registry: r, image: a/tool, tags: ["*"], owns: ["tool"]}
+`
+	if _, err := Parse([]byte(base)); err != nil {
+		t.Fatalf("forge and registry source owning tool: %v", err)
+	}
+	_, err := Parse([]byte(base + "  - {name: image2, registry: r, image: a/tool2, tags: [\"*\"], owns: [\"t*\"]}\n"))
+	if err == nil || !strings.Contains(err.Error(), `overlaps "tool" in source "image"`) {
+		t.Errorf("two registry sources owning tool: %v", err)
 	}
 }

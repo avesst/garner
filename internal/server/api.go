@@ -70,6 +70,9 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	configured := map[string][]string{}
 	for _, fm := range s.Formats.All() {
 		key := fm.DistributionKey()
+		if key == "" {
+			continue // not delivered by upload (images are pushed)
+		}
 		targets[key] = r.URL.Query().Get(key)
 		configured[key] = fm.Distributions(cfg)
 	}
@@ -406,6 +409,12 @@ func (s *Server) sync(w http.ResponseWriter, r *http.Request) {
 // override is looked up exactly. An org or group source must name one of
 // the repositories its last listing found. msg explains a rejected name.
 func (s *Server) overrideRepo(ctx context.Context, src config.Source, repo string) (string, string, error) {
+	if src.IsRegistry() {
+		if repo != "" && repo != src.Image {
+			return "", fmt.Sprintf("source %s syncs only %s", src.Name, src.Image), nil
+		}
+		return src.Image, "", nil
+	}
 	if src.Repo != "" {
 		if repo != "" && !strings.EqualFold(repo, src.Repo) {
 			return "", fmt.Sprintf("source %s syncs only %s", src.Name, src.Repo), nil

@@ -50,9 +50,10 @@ Every key is optional unless marked
 .BR required .
 A key you leave out keeps its default.
 The format sections,
-.B deb
+.BR deb ,
+.B rpm
 and
-.BR rpm ,
+.BR oci ,
 are the exception: a format is enabled by its section being present, and
 at least one is required.
 An empty section
@@ -113,8 +114,9 @@ Where the HTTP server listens.
 Changing it needs a restart.
 .TP
 .BR public_url " (\fIURL\fR, " required )
-The URL apt and dnf clients use.
-It goes into the client files and the landing page.
+The URL clients use.
+It goes into the apt and dnf client files and the landing page, and its
+host is the registry host that image names start with.
 Must be an absolute
 .B http
 or
@@ -306,6 +308,39 @@ and gets no repository of its own.
 Releases to publish.
 Same rules and default handling as
 .BR deb.suites .
+.SH OCI
+Present: garner is a container registry at
+.I /v2/
+on the host root, which
+.BR "docker push" ,
+.B docker pull
+and other OCI clients use.
+Absent: images are disabled.
+Images are pushed or synced from registries, never uploaded with
+.BR "garner upload" .
+Pushes need a token with the
+.B upload
+scope, used with
+.BI "docker login " host " \-u " "token name"
+and the token's secret as the password.
+.TP
+.BR retention " (\fIinteger\fR, default " 10 )
+Untagged manifests kept per image name, newest first, besides every
+tagged one.
+A manifest becomes untagged when its tag moves to a newer push;
+deployments that pin digests keep working until it ages out.
+.B 0
+keeps all.
+Also applies to images from a registry source that does not set its own
+.BR retention ;
+.B defaults.retention
+does not apply to images.
+.TP
+.BR upload_expiry " (\fIduration\fR, default " 24h )
+How long a pushed blob that no manifest uses yet, and an idle upload
+session, are kept before GC removes them.
+Must be at least
+.BR 1m .
 .SH DEFAULTS
 Settings for every source that does not override them.
 .B retention
@@ -433,16 +468,72 @@ For a private repository, set
 to the address the forge puts in its asset links
 (Forgejo's ROOT_URL, GitLab's external_url);
 otherwise the downloads fail without the token and are retried on every poll.
-.SH SOURCES
-A list of places to sync releases from.
+.SH REGISTRIES
+A list of OCI registries that registry sources sync images from.
 There are none by default.
-A source is one repository
+.TP
+.BR name " (\fIname\fR, " required )
+Name that sources refer to.
+Same rules as forge names.
+.TP
+.BR url " (\fIhttps URL\fR, " required )
+The registry's address without a path, such as
+.I https://ghcr.io
+or, for Docker Hub,
+.IR https://registry\-1.docker.io .
+Must be
+.BR https .
+.TP
+.BR username " (\fIstring\fR, default empty)"
+User name sent with the token.
+Needs
+.B token_env
+or
+.BR token_file .
+.TP
+.BR token_env " (\fIvariable name\fR, default empty)"
+Environment variable holding the password or token.
+.TP
+.BR token_file " (\fIpath\fR, default empty)"
+File holding the password or token; surrounding whitespace is trimmed.
+Set
+.B token_env
+or
+.BR token_file ,
+not both.
+With neither, garner pulls anonymously.
+.TP
+.BR auth_hosts " (\fIlist of hosts\fR, default " [] )
+Hosts besides the registry's own that may receive the credentials as
+token endpoints:
+.I auth.docker.io
+for Docker Hub, the GitLab host for a GitLab registry.
+ghcr.io needs none.
+.TP
+.BR ca_file ", " max_concurrent ", " proxy
+As for forges.
+.PP
+Credentials go only to the registry's host and to a token endpoint on it
+or in
+.BR auth_hosts .
+A registry that names another token endpoint gets an error, not the
+credentials.
+Blob downloads redirected to other hosts, as ghcr.io and Docker Hub do to
+their CDNs, are fetched without credentials.
+Docker Hub limits anonymous pulls per address, so give a Docker Hub
+registry credentials.
+.SH SOURCES
+A list of places to sync from.
+There are none by default.
+A forge source is one repository
 .RB ( repo ),
 a GitHub or Forgejo organization
 .RB ( org ),
 or a GitLab group
-.RB ( group ).
-Set exactly one of the three.
+.RB ( group );
+set exactly one of the three.
+A registry source is one image of a registry; see
+.BR "REGISTRY SOURCES" .
 .TP
 .BR name " (\fIname\fR, " required )
 Unique name, used in logs, metrics, status and
@@ -542,6 +633,74 @@ and files without the extension of an enabled format
 On its first run, a source syncs only the latest release of each
 repository.
 Later runs pick up every release published since then.
+.SS REGISTRY SOURCES
+A registry source sets
+.B registry
+in place of
+.BR forge .
+.TP
+.BR registry " (\fIregistry name\fR, " required )
+The
+.B registries[].name
+to sync from.
+.TP
+.BR image " (\fIimage name\fR, " required )
+The image's path on the registry, such as
+.I avesst/tool
+or, on Docker Hub,
+.IR library/alpine .
+.TP
+.BR tags " (\fIlist of globs\fR, " required )
+Tags to sync.
+Every matching tag is synced on the first run, so keep them narrow.
+.TP
+.BR as " (\fIimage name\fR, default " image )
+The name the image is served under.
+.PP
+.BR owns ,
+.BR retention ,
+.BR poll_interval ,
+.B approval
+and
+.B min_release_age
+work as for forge sources; the forge source keys are not allowed.
+A registry source's
+.B owns
+reserves image names, and a forge source's reserves package names, so the
+same glob in both is no conflict.
+.PP
+Each poll lists the image's tags and resolves the matching ones.
+A digest garner has not stored is downloaded whole, every platform of an
+index included, and every blob is checked against its digest.
+A tag that moves upstream moves in garner too; the digest it pointed at
+becomes untagged and is kept per
+.BR retention .
+A tag deleted upstream stays in garner.
+A digest garner has processed is never synced again once it is removed,
+whether by retention, a rollback or a delete, so a rollback holds until
+the tag moves upstream to a new digest.
+.PP
+With
+.BR min_release_age ,
+the wait runs from when garner first saw the digest under the tag.
+Each poll applies the newest digest seen under the tag that is old enough,
+so a tag upstream moves more often than the minimum age still advances.
+A digest upstream withdraws, by moving the tag back before it is old
+enough, is never applied.
+A tag moves only when upstream moves it: after a rollback, or after an
+admin deletes the tag, it stays as it is until upstream points it at a new
+digest.
+Two registry sources may not serve images under the same name.
+Changing a source's
+.B as
+syncs its images under the new name on the next poll.
+.BI "garner sync " source " \-\-ignore\-age " tag
+lets a waiting digest through.
+With
+.BR "approval: manual" ,
+a new digest is held without its tag; after
+.BR "garner approve" ,
+the next poll points the tag at it.
 .SS ASSET RULES
 Each entry of
 .BR assets :
@@ -602,10 +761,11 @@ the running configuration stays active until you restart:
 .BR storage.path ,
 and adding or removing a format section
 .RB ( deb ,
-.BR rpm ).
+.BR rpm ,
+.BR oci ).
 .PP
 A reload restarts only the sources whose effective settings changed,
-including inherited defaults and their forge's settings.
+including inherited defaults and their forge's or registry's settings.
 The others keep their schedule.
 .SH EXAMPLE
 A small setup: one internal Forgejo, one repository with separate Ubuntu

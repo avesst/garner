@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/store"
 )
 
@@ -65,6 +66,13 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 
 	var gone []string
 	err = p.Store.Tx(ctx, func(q *store.Queries) error {
+		clock := now
+		if p.Now != nil {
+			clock = p.Now()
+		}
+		if _, err := q.DeleteExpiredStaged(ctx, clock); err != nil {
+			return err
+		}
 		var err error
 		gone, err = q.DeleteUnreferencedPackages(ctx)
 		return err
@@ -79,14 +87,11 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	prefixes := map[string]bool{}
-	for sha := range live {
-		prefixes[sha[:16]] = true
-	}
 	for _, fm := range p.Formats.All() {
 		root := p.poolDir(fm.Name())
+		garbage := poolGarbage(fm, root, live)
 		n, err := sweep(root, func(path string, d fs.DirEntry) bool {
-			return !prefixes[filepath.Base(filepath.Dir(path))]
+			return garbage(path)
 		})
 		if err != nil {
 			return nil, err
@@ -169,6 +174,11 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 			res.Snapshots = append(res.Snapshots, e.Name())
 		}
 	}
+	for _, c := range p.Collect {
+		if err := c(ctx); err != nil {
+			return nil, err
+		}
+	}
 	p.Log.Info("gc finished", "snapshots", len(res.Snapshots), "blobs", res.Blobs,
 		"pool_files", res.PoolFiles, "temp_files", res.TempFiles)
 	return res, nil
@@ -229,4 +239,23 @@ func sweep(root string, remove func(path string, d fs.DirEntry) bool) (int, erro
 		os.Remove(dirs[i]) // fails, harmlessly, unless empty
 	}
 	return n, err
+}
+
+// poolGarbage returns whether a file below a format's pool directory root
+// holds no live blob. Pool files of most formats sit in a directory named
+// after the first 16 hex digits of their blob (section 4); a BlobPooler's
+// are at exactly BlobPoolPath.
+func poolGarbage(fm format.Format, root string, live map[string]bool) func(path string) bool {
+	if bp, ok := fm.(format.BlobPooler); ok {
+		want := map[string]bool{}
+		for sha := range live {
+			want[filepath.Join(root, filepath.FromSlash(bp.BlobPoolPath(sha)))] = true
+		}
+		return func(path string) bool { return !want[path] }
+	}
+	prefixes := map[string]bool{}
+	for sha := range live {
+		prefixes[sha[:min(16, len(sha))]] = true
+	}
+	return func(path string) bool { return !prefixes[filepath.Base(filepath.Dir(path))] }
 }

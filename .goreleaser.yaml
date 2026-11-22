@@ -41,10 +41,11 @@ nfpms:
     homepage: https://github.com/avesst/garner
     license: 0BSD
     description: |-
-      Internal deb and rpm package repository
-      garner serves signed apt and dnf repositories from uploads and from
-      releases synced from GitHub, GitLab and Forgejo/Gitea. createrepo_c,
-      rpmsign and gpg are needed for rpm support only.
+      Internal repository for packages and container images
+      garner serves signed apt and dnf repositories and an OCI container
+      registry, filled from uploads and pushes and from releases and images
+      synced from GitHub, GitLab, Forgejo/Gitea and container registries.
+      createrepo_c, rpmsign and gpg are needed for rpm support only.
     section: admin
     priority: optional
     file_name_template: "{{ .ConventionalFileName }}"

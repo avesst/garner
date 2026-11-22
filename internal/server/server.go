@@ -35,9 +35,18 @@ type Syncer interface {
 	IgnoreAge(ctx context.Context, source, repo, tag, by string) error
 }
 
+// Kinds of sync source in SourceStatus. The landing page lists each
+// under the ecosystem it delivers (section 14).
+const (
+	KindForge    = "forge"
+	KindRegistry = "registry"
+)
+
 // SourceStatus is one source's sync state.
 type SourceStatus struct {
-	Name        string   `json:"name"`
+	Name string `json:"name"`
+	// Kind is KindForge or KindRegistry.
+	Kind        string   `json:"kind"`
 	LastRun     string   `json:"last_run,omitempty"`
 	LastSuccess string   `json:"last_success,omitempty"`
 	LastError   string   `json:"last_error,omitempty"`
@@ -81,6 +90,8 @@ type Server struct {
 
 	// MetricsSeparate disables /metrics on the main handler.
 	MetricsSeparate bool
+	// Live are format handlers at the host root, by path prefix ("/v2/").
+	Live map[string]http.Handler
 
 	httpRequests *metrics.Vec
 	uploads      *metrics.Vec
@@ -124,6 +135,9 @@ func (s *Server) Handler() http.Handler {
 	handle("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such API endpoint")
 	})
+	for prefix, h := range s.Live {
+		handle(prefix, h.ServeHTTP)
+	}
 
 	files := http.FileServer(http.Dir(filepath.Join(s.Root, "public")))
 	// "/" without a method: "GET /" would overlap "/api/" ambiguously.
@@ -137,6 +151,31 @@ func (s *Server) Handler() http.Handler {
 		files.ServeHTTP(w, r)
 	})
 	return mux
+}
+
+// ownRoutes are garner's own paths, which no format may claim (section
+// 17).
+var ownRoutes = []string{"/api/", "/snapshots/", "/healthz", "/readyz", "/metrics", "/key.asc", "/key.gpg", "/index.html"}
+
+// CheckLive rejects live prefixes that overlap garner's own routes or each
+// other.
+func CheckLive(prefixes []string) error {
+	for i, p := range prefixes {
+		if !strings.HasPrefix(p, "/") || !strings.HasSuffix(p, "/") || p == "/" {
+			return fmt.Errorf("live route %q must be a path prefix such as /v2/", p)
+		}
+		for _, o := range ownRoutes {
+			if strings.HasPrefix(o, p) || strings.HasPrefix(p, o) {
+				return fmt.Errorf("live route %q overlaps garner's %s", p, o)
+			}
+		}
+		for _, q := range prefixes[i+1:] {
+			if strings.HasPrefix(p, q) || strings.HasPrefix(q, p) {
+				return fmt.Errorf("live routes %q and %q overlap", p, q)
+			}
+		}
+	}
+	return nil
 }
 
 // setCache lets proxies keep content-addressed files and makes them

@@ -1,7 +1,8 @@
 # garner
 
-garner serves signed apt and dnf repositories from uploads and forge
-releases. `README.md` covers what it does, `docs/design.md` is the spec,
+garner is an internal repository for packages and container images:
+signed apt and dnf repositories and an OCI registry, filled from uploads,
+pushes and releases synced from forges and registries. `README.md` covers what it does, `docs/design.md` is the spec,
 and `docs/plan.md` tracks what is built and what is not yet verified.
 
 ## Checks
@@ -10,8 +11,8 @@ and `docs/plan.md` tracks what is built and what is not yet verified.
 - Tests that compare against real tools (`dpkg`, `dpkg-deb`, `rpm`, `gpg`, `gpgv`)
   skip when the tool is missing. A skip is not a pass: run the package with
   `go test -v` and report which comparisons were skipped.
-- `just e2e` runs real apt and dnf clients in containers and needs Docker.
-  Run it for changes to publishing, signing or repository layout.
+- `just e2e` runs real apt, dnf and container clients and needs Docker.
+  Run it for changes to publishing, signing, repository layout or `/v2/`.
 - PostgreSQL migration compatibility is checked only in CI
   (`scripts/check-migrations-postgres.sh` needs a server). Say when a
   migration change has not been through it.

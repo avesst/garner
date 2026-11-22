@@ -32,8 +32,9 @@ type SnapshotEntry struct {
 	ServedSHA256 string
 }
 
-// InsertSnapshot records a snapshot, its formats and its package set.
-func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []SnapshotEntry) error {
+// InsertSnapshot records a snapshot, its formats, its package set and the
+// tags it serves.
+func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []SnapshotEntry, tags []format.Tag) error {
 	if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshots (id, created_at, config_hash, is_current, inputs)
 		VALUES (?, ?, ?, ?, ?)`, s.ID, s.CreatedAt, s.ConfigHash, false, s.Inputs); err != nil {
 		return err
@@ -47,6 +48,12 @@ func (q *Queries) InsertSnapshot(ctx context.Context, s *Snapshot, entries []Sna
 	for _, e := range entries {
 		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_packages (snapshot_id, package_id, distribution, served_sha256)
 			VALUES (?, ?, ?, ?)`, s.ID, e.PackageID, e.Distribution, e.ServedSHA256); err != nil {
+			return err
+		}
+	}
+	for _, t := range tags {
+		if _, err := q.q.ExecContext(ctx, `INSERT INTO snapshot_tags (snapshot_id, format, name, tag, package_id)
+			VALUES (?, ?, ?, ?, ?)`, s.ID, t.Format, t.Name, t.Tag, t.PackageID); err != nil {
 			return err
 		}
 	}
@@ -181,14 +188,19 @@ func (q *Queries) DeleteSnapshot(ctx context.Context, id string) error {
 	return err
 }
 
-// ReferencedBlobs returns every blob a snapshot serves, and every blob
-// referenced by a package that is in a snapshot or not removed everywhere.
-// GC keeps these (section 9).
+// ReferencedBlobs returns every blob a snapshot serves, every blob
+// referenced by a package that is in a snapshot or not removed everywhere,
+// including the further blobs such a package owns, and every staged blob.
+// GC keeps these (sections 9 and 19).
 func (q *Queries) ReferencedBlobs(ctx context.Context) (map[string]bool, error) {
 	rows, err := q.q.QueryContext(ctx, `SELECT p.blob_sha256, p.signed_blob_sha256 FROM packages p
 		WHERE p.id IN (SELECT package_id FROM snapshot_packages)
 		   OR p.id IN (SELECT package_id FROM placements WHERE state <> ?)
-		UNION SELECT served_sha256, NULL FROM snapshot_packages WHERE served_sha256 <> ''`, Removed)
+		UNION SELECT served_sha256, NULL FROM snapshot_packages WHERE served_sha256 <> ''
+		UNION SELECT pb.sha256, NULL FROM package_blobs pb
+		WHERE pb.package_id IN (SELECT package_id FROM snapshot_packages)
+		   OR pb.package_id IN (SELECT package_id FROM placements WHERE state <> ?)
+		UNION SELECT sha256, NULL FROM staged_blobs`, Removed, Removed)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +250,17 @@ func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, err
 		  AND p.id NOT IN (SELECT package_id FROM placements WHERE state <> ?))`, Removed); err != nil {
 		return nil, err
 	}
+	// Tags and further blobs of the packages about to go. A package in no
+	// snapshot is in no snapshot's tags either: a snapshot serves only
+	// tags on its packages.
+	for _, table := range []string{"tags", "package_blobs"} {
+		if _, err := q.q.ExecContext(ctx, `DELETE FROM `+table+` WHERE package_id IN (
+			SELECT p.id FROM packages p
+			WHERE p.id NOT IN (SELECT package_id FROM snapshot_packages)
+			  AND p.id NOT IN (SELECT package_id FROM placements))`); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := q.q.ExecContext(ctx, `DELETE FROM packages
 		WHERE id NOT IN (SELECT package_id FROM snapshot_packages)
 		  AND id NOT IN (SELECT package_id FROM placements)`); err != nil {
@@ -246,7 +269,9 @@ func (q *Queries) DeleteUnreferencedPackages(ctx context.Context) ([]string, err
 	rows, err := q.q.QueryContext(ctx, `SELECT sha256 FROM blobs
 		WHERE sha256 NOT IN (SELECT blob_sha256 FROM packages)
 		  AND sha256 NOT IN (SELECT signed_blob_sha256 FROM packages WHERE signed_blob_sha256 IS NOT NULL)
-		  AND sha256 NOT IN (SELECT served_sha256 FROM snapshot_packages)`)
+		  AND sha256 NOT IN (SELECT served_sha256 FROM snapshot_packages)
+		  AND sha256 NOT IN (SELECT sha256 FROM package_blobs)
+		  AND sha256 NOT IN (SELECT sha256 FROM staged_blobs)`)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +300,9 @@ func (q *Queries) RemoveBlob(ctx context.Context, sha string, remove func() erro
 	var referenced bool
 	err := q.q.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM packages
 		WHERE blob_sha256 = ? OR signed_blob_sha256 = ?)
-		OR EXISTS (SELECT 1 FROM snapshot_packages WHERE served_sha256 = ?)`, sha, sha, sha).Scan(&referenced)
+		OR EXISTS (SELECT 1 FROM snapshot_packages WHERE served_sha256 = ?)
+		OR EXISTS (SELECT 1 FROM package_blobs WHERE sha256 = ?)
+		OR EXISTS (SELECT 1 FROM staged_blobs WHERE sha256 = ?)`, sha, sha, sha, sha, sha).Scan(&referenced)
 	if err != nil || referenced {
 		return false, err
 	}

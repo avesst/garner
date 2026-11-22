@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/avesst/garner/internal/config"
@@ -32,12 +33,6 @@ type clientVariant struct {
 	Instructions string
 }
 
-// formatLabels describe formats on the landing page; others show their name.
-var formatLabels = map[string][2]string{
-	"deb": {"Debian / Ubuntu", "apt"},
-	"rpm": {"Fedora / RHEL", "dnf"},
-}
-
 // countGrid is one format's package counts, distributions by architecture.
 type countGrid struct {
 	Format string
@@ -59,23 +54,87 @@ type gridCell struct {
 	Alpha string
 }
 
+// ecosystem is one tab of the landing page: the enabled formats of one
+// namespace (section 14).
+type ecosystem struct {
+	// ID is the namespace.
+	ID      string
+	Label   string
+	Signed  bool
+	Formats []format.Format
+	// Kind is the kind of sync source that delivers the ecosystem,
+	// "forge" or "registry", as the status API reports it.
+	Kind string
+}
+
+// ecosystems groups the enabled formats by namespace, in registration
+// order.
+func (p *Publisher) ecosystems() []*ecosystem {
+	var out []*ecosystem
+	byNS := map[string]*ecosystem{}
+	for _, fm := range p.Formats.All() {
+		e, ok := byNS[fm.Namespace()]
+		if !ok {
+			e = &ecosystem{ID: fm.Namespace(), Label: fm.Namespace(), Kind: "forge"}
+			if pr, ok := fm.(format.Presenter); ok {
+				if pres := pr.Presentation(); pres.Ecosystem != "" {
+					e.Label = pres.Ecosystem
+				}
+			}
+			byNS[e.ID] = e
+			out = append(out, e)
+		}
+		if pr, ok := fm.(format.Presenter); ok && pr.Presentation().Signed {
+			e.Signed = true
+		}
+		if _, ok := fm.(format.RegistryFormat); ok {
+			e.Kind = "registry"
+		}
+		e.Formats = append(e.Formats, fm)
+	}
+	return out
+}
+
+// presentation returns a format's presentation, defaulting to its name.
+func presentation(fm format.Format) format.Presentation {
+	if pr, ok := fm.(format.Presenter); ok {
+		pres := pr.Presentation()
+		if pres.Label == "" {
+			pres.Label = fm.Name()
+		}
+		return pres
+	}
+	return format.Presentation{Label: fm.Name()}
+}
+
+// ecoTab is an ecosystem's tab on the landing page.
+type ecoTab struct {
+	*ecosystem
+	Clients   []clientSection
+	Grids     []countGrid
+	Total     int // packages counted in Grids
+	Summaries []format.Summary
+	// Rows list every package name of the tab, paged and filtered by the
+	// page's script.
+	Rows []format.Row
+}
+
 type landingData struct {
 	Name         string
 	URL          string
 	Fingerprint  []string // in groups of four, as gpg prints it
-	Clients      []clientSection
-	Grids        []countGrid
-	Total        int
+	Tabs         []ecoTab
 	PublishedAt  string
 	SnapshotID   string
 	ConfigHash   string
 	ConfigCommit string
 }
 
-// writeRootFiles writes the landing page, the keyring and the client files
-// into the snapshot, so they change with it (section 4).
+// writeRootFiles writes the landing page, the keyring
+// and the client files into the snapshot, so they change with it
+// (section 4).
 func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signing.Signer,
-	snap *store.Snapshot, pkgs []*format.Package) error {
+	snap *store.Snapshot, pkgs []*format.Package, tags []format.Tag) error {
 	armored, binary, err := signer.PublicKeys()
 	if err != nil {
 		return err
@@ -97,28 +156,144 @@ func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signin
 	if p.ConfigCommit != nil {
 		data.ConfigCommit = p.ConfigCommit()
 	}
-	for _, fm := range p.Formats.All() {
-		sec := clientSection{Format: fm.Name(), Label: fm.Name(), Key: fm.DistributionKey()}
-		if l, ok := formatLabels[fm.Name()]; ok {
-			sec.Label, sec.Tool = l[0], l[1]
-		}
-		for _, cf := range fm.Clients(cfg, data.URL) {
-			if err := fsutil.WriteFile(filepath.Join(dir, filepath.FromSlash(cf.Path)), cf.Content, 0o644); err != nil {
-				return err
-			}
-			sec.Variants = append(sec.Variants, clientVariant{
-				Distribution: cf.Distribution, FileName: cf.Name, Path: cf.Path,
-				File: string(cf.Content), Instructions: cf.Instructions,
-			})
-		}
-		data.Clients = append(data.Clients, sec)
+	byFormat := map[string][]*format.Package{}
+	for _, pk := range pkgs {
+		byFormat[pk.Format] = append(byFormat[pk.Format], pk)
 	}
-	data.Grids, data.Total = grids(p.Formats.All(), cfg, pkgs)
+	tagsByFormat := map[string][]format.Tag{}
+	for _, t := range tags {
+		tagsByFormat[t.Format] = append(tagsByFormat[t.Format], t)
+	}
+	for _, e := range p.ecosystems() {
+		tab := ecoTab{ecosystem: e}
+		var rows []format.Row
+		var plain []format.Format
+		for _, fm := range e.Formats {
+			own, ownTags := byFormat[fm.Name()], tagsByFormat[fm.Name()]
+			if l, ok := fm.(format.Lister); ok {
+				tab.Summaries = append(tab.Summaries, l.Summary(cfg, data.URL, own, ownTags))
+				rows = append(rows, l.Rows(cfg, data.URL, own, ownTags)...)
+				continue
+			}
+			plain = append(plain, fm)
+			pres := presentation(fm)
+			sec := clientSection{Format: fm.Name(), Label: pres.Label, Tool: pres.Tool, Key: fm.DistributionKey()}
+			for _, cf := range fm.Clients(cfg, data.URL) {
+				if err := fsutil.WriteFile(filepath.Join(dir, filepath.FromSlash(cf.Path)), cf.Content, 0o644); err != nil {
+					return err
+				}
+				sec.Variants = append(sec.Variants, clientVariant{
+					Distribution: cf.Distribution, FileName: cf.Name, Path: cf.Path,
+					File: string(cf.Content), Instructions: cf.Instructions,
+				})
+			}
+			if len(sec.Variants) > 0 {
+				tab.Clients = append(tab.Clients, sec)
+			}
+		}
+		if len(plain) > 0 {
+			tab.Grids, tab.Total = grids(plain, cfg, pkgs)
+			rows = append(rows, packageRows(plain, pkgs)...)
+		}
+		tab.Rows = sortRows(rows)
+		data.Tabs = append(data.Tabs, tab)
+	}
 	var b bytes.Buffer
 	if err := landingTemplate.Execute(&b, data); err != nil {
 		return err
 	}
 	return fsutil.WriteFile(filepath.Join(dir, "index.html"), b.Bytes(), 0o644)
+}
+
+// sortRows orders rows by group, then keeps their order within it, rows
+// without a group first.
+func sortRows(rows []format.Row) []format.Row {
+	slices.SortStableFunc(rows, func(a, b format.Row) int { return strings.Compare(a.Group, b.Group) })
+	return rows
+}
+
+// packageRows lists every package name of formats that do not list
+// themselves: per format and distribution, its versions, newest first,
+// with their architectures.
+func packageRows(fms []format.Format, pkgs []*format.Package) []format.Row {
+	listed := map[string]bool{}
+	for _, fm := range fms {
+		listed[fm.Name()] = true
+	}
+	byName := map[string][]*format.Package{}
+	for _, pk := range pkgs {
+		if listed[pk.Format] {
+			byName[pk.Name] = append(byName[pk.Name], pk)
+		}
+	}
+	var names []string
+	for n := range byName {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	var rows []format.Row
+	for _, n := range names {
+		row := format.Row{Name: n}
+		for _, fm := range fms {
+			var own []*format.Package
+			for _, pk := range byName[n] {
+				if pk.Format == fm.Name() {
+					own = append(own, pk)
+				}
+			}
+			if len(own) == 0 {
+				continue
+			}
+			label := presentation(fm).Label
+			dists := map[string][]*format.Package{}
+			var order []string
+			for _, pk := range own {
+				if _, ok := dists[pk.Distribution]; !ok {
+					order = append(order, pk.Distribution)
+				}
+				dists[pk.Distribution] = append(dists[pk.Distribution], pk)
+			}
+			slices.Sort(order)
+			for _, d := range order {
+				ps := dists[d]
+				slices.SortStableFunc(ps, func(a, b *format.Package) int { return fm.Compare(b, a) })
+				var versions []string
+				archs := map[string][]string{}
+				for _, pk := range ps {
+					v := fullVersion(pk)
+					if _, ok := archs[v]; !ok {
+						versions = append(versions, v)
+					}
+					if pk.Arch != "" && !slices.Contains(archs[v], pk.Arch) {
+						archs[v] = append(archs[v], pk.Arch)
+					}
+				}
+				parts := make([]string, len(versions))
+				for i, v := range versions {
+					parts[i] = v
+					if a := archs[v]; len(a) > 0 {
+						slices.Sort(a)
+						parts[i] += " (" + strings.Join(a, ", ") + ")"
+					}
+				}
+				row.Facts = append(row.Facts, format.Fact{Label: label + " · " + d, Value: strings.Join(parts, ", ")})
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// fullVersion formats epoch, version and release in the usual way.
+func fullVersion(p *format.Package) string {
+	v := p.Version
+	if p.Release != "" {
+		v += "-" + p.Release
+	}
+	if p.Epoch != 0 {
+		v = fmt.Sprintf("%d:%s", p.Epoch, v)
+	}
+	return v
 }
 
 func groups(s string, n int) []string {
@@ -195,12 +370,12 @@ func grids(fms []format.Format, cfg *config.Config, pkgs []*format.Package) ([]c
 	return out, total
 }
 
-var landingTemplate = template.Must(template.New("index").Parse(`<!doctype html>
+var landingTemplate = template.Must(template.New("index").Funcs(template.FuncMap{"lower": strings.ToLower}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Name}} package repository</title>
+<title>{{.Name}} repository</title>
 <style>
 :root {
   --bg: #f8f8f5; --panel: #ffffff; --fg: #1c1e1b; --muted: #676b63; --line: #dfe1da;
@@ -300,19 +475,66 @@ dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .35r
 dt { color: var(--muted); }
 dd { margin: 0; overflow-wrap: anywhere; font: .8125rem var(--mono); }
 @media (prefers-reduced-motion: reduce) { .copy { transition: none; } }
+.eco { display: grid; gap: 1.75rem; }
+.eco > h2.eco-h { font-size: 1.35rem; margin: 0; }
+.eco-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); overflow-x: auto; margin-bottom: 1.75rem; }
+.eco-tabs button { border: 0; background: none; color: var(--muted); padding: .6rem 1rem; cursor: pointer;
+  border-bottom: 2px solid transparent; white-space: nowrap; font-size: 1rem; }
+.eco-tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+.stats { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 0; font-size: .9375rem; }
+.stats strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; margin-right: .25rem; }
+.groups { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 0; font-size: .8125rem; }
+.groups span { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .6rem; background: var(--panel); }
+.groups code { font-size: .8125rem; }
+.list h2 .count { font-weight: 400; }
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin-bottom: .5rem; }
+.filter { width: 100%; max-width: 24rem; font: inherit; padding: .4rem .6rem; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--panel); color: var(--fg); }
+.pager { display: flex; align-items: center; gap: .5rem; font-size: .875rem; color: var(--muted); }
+.pager button { border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 6px;
+  padding: .2rem .7rem; cursor: pointer; }
+.pager button:disabled { opacity: .4; cursor: default; }
+.rows { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; overflow: hidden; }
+.row { display: grid; gap: .4rem; padding: .75rem 1rem; border-top: 1px solid var(--line); }
+.row:first-child, .row.first { border-top: 0; }
+.row:hover { background: var(--code); }
+.row .head { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; min-width: 0; }
+.row .name { font: 600 .9375rem var(--mono); overflow-wrap: anywhere; }
+.row .tags { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; font-size: .8125rem; }
+.row .tags code { font-size: .75rem; padding: .05rem .45rem; border-radius: 999px; background: var(--accent-soft);
+  color: var(--accent); }
+.row .tags a { color: var(--muted); }
+.copy-row { margin-left: auto; display: inline-flex; align-items: center; gap: .35rem; font: .75rem var(--mono);
+  color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  padding: .15rem .5rem; cursor: pointer; }
+.copy-row:hover, .copy-row.done { color: var(--fg); border-color: var(--accent); }
+.copy-row svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.facts { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin: 0; font-size: .8125rem; }
+.facts div { display: flex; gap: .4rem; min-width: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font: .8125rem var(--mono); overflow-wrap: anywhere; }
+footer { border-top: 1px solid var(--line); padding-top: 1rem; font-size: .8125rem; color: var(--muted); }
+footer p { margin: 0; }
+footer code { font: .75rem var(--mono); color: var(--fg); }
 </style>
 </head>
 <body>
 <main>
 <header>
-<p class="eyebrow">Package repository</p>
+<p class="eyebrow">Repository</p>
 <h1>{{.Name}}</h1>
 <div class="pills" id="pills"><span class="pill"><i></i><span>Published <time id="published" datetime="{{.PublishedAt}}">{{.PublishedAt}}</time></span></span></div>
 </header>
 
+<div id="ecos">
+{{- range .Tabs}}
+<section class="eco" id="eco-{{.ID}}" data-kind="{{.Kind}}">
+<h2 class="eco-h">{{.Label}}</h2>
+{{- if .Clients}}
 <section>
 <h2>Add this repository</h2>
-<div class="install" id="install">
+<div class="install">
 {{- range .Clients}}
 <section class="fmt" data-key="{{.Key}}">
 <h3 class="fmt-h">{{.Label}}{{if .Tool}} <small>{{.Tool}}</small>{{end}}</h3>
@@ -332,10 +554,23 @@ dd { margin: 0; overflow-wrap: anywhere; font: .8125rem var(--mono); }
 {{- end}}
 </div>
 </section>
+{{- end}}
+{{- range .Summaries}}
+<section>
+<h2>Use it</h2>
+<pre><code>{{.Usage}}</code></pre>
+</section>
+{{- end}}
 
 <div class="two">
 <section>
-<h2>Packages</h2>
+<h2>Contents</h2>
+{{- range .Summaries}}
+<p class="stats">{{range .Stats}}<span><strong>{{.Count}}</strong>{{.Label}}</span>{{end}}</p>
+{{- if .Groups}}
+<div class="groups">{{range .Groups}}<span><code>{{.Label}}</code> {{.Count}}</span>{{end}}{{if .More}}<span>and {{.More}} more</span>{{end}}</div>
+{{- end}}
+{{- end}}
 {{- range .Grids}}
 <div class="matrix">
 <h3>{{.Format}}</h3>
@@ -350,31 +585,58 @@ dd { margin: 0; overflow-wrap: anywhere; font: .8125rem var(--mono); }
 </table></div>
 </div>
 {{- end}}
+{{- if .Grids}}
 <p class="note">{{if .Total}}{{.Total}} {{if eq .Total 1}}package{{else}}packages{{end}} in this snapshot.{{else}}No packages yet.{{end}}
 A dashed cell is a configured architecture with nothing published.</p>
+{{- end}}
 </section>
 
 <div class="stack">
+{{- if .Signed}}
 <section>
 <h2>Signing key</h2>
-<p class="fp">{{range $i, $g := .Fingerprint}}{{if $i}} {{end}}<span>{{$g}}</span>{{end}}</p>
+<p class="fp">{{range $i, $g := $.Fingerprint}}{{if $i}} {{end}}<span>{{$g}}</span>{{end}}</p>
 <div class="links"><a href="key.asc">key.asc</a><a href="key.gpg">key.gpg</a></div>
 </section>
+{{- end}}
 <section>
 <h2>Sync sources</h2>
-<div class="src" id="sources"><p class="muted">Loading live status…</p></div>
+<div class="src" data-kind="{{.Kind}}"><p class="muted">Loading live status…</p></div>
 </section>
 </div>
 </div>
 
-<section>
-<h2>Snapshot</h2>
-<dl>
-<dt>Published</dt><dd>{{.PublishedAt}}</dd>
-<dt>Snapshot</dt><dd>{{.SnapshotID}}</dd>
-<dt>Configuration</dt><dd>{{.ConfigHash}}{{if .ConfigCommit}} (commit {{.ConfigCommit}}){{end}}</dd>
-</dl>
+<section class="list">
+<h2>Browse <span class="muted count">({{len .Rows}})</span></h2>
+{{- if not .Rows}}
+<p class="muted">Nothing published yet.</p>
+{{- else}}
+<ul class="rows">
+{{- range .Rows}}
+<li class="row" data-name="{{.Name}}">
+<div class="head"><strong class="name">{{.Name}}</strong>
+{{- if .Tags}}
+<span class="tags">{{range .Tags}}<code>{{.}}</code>{{end}}{{if .MoreTags}}<a href="{{.TagsURL}}">+{{.MoreTags}} more</a>{{end}}</span>
+{{- end}}
+{{- if .Copy}}
+<button type="button" class="copy-row" data-copy="{{.Copy}}" aria-label="{{.CopyLabel}}" title="{{.Copy}}" hidden>pull</button>
+{{- end}}</div>
+{{- if .Facts}}
+<dl class="facts">{{range .Facts}}<div><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>
+{{- end}}
+</li>
+{{- end}}
+</ul>
+{{- end}}
 </section>
+</section>
+{{- end}}
+</div>
+
+<footer>
+<p>Snapshot <code>{{.SnapshotID}}</code>, published <time datetime="{{.PublishedAt}}">{{.PublishedAt}}</time>,
+configuration <code>{{.ConfigHash}}</code>{{if .ConfigCommit}} (commit <code>{{.ConfigCommit}}</code>){{end}}</p>
+</footer>
 </main>
 <script>
 function ago(iso) {
@@ -384,60 +646,73 @@ function ago(iso) {
     secs < 172800 ? Math.floor(secs / 3600) + " h ago" : Math.floor(secs / 86400) + " days ago";
 }
 
+function tabBar(cls, sections, heading, container, before) {
+  var tabs = document.createElement("div");
+  tabs.className = cls;
+  tabs.setAttribute("role", "tablist");
+  var tbs = [];
+  sections.forEach(function (f, i) {
+    var h = f.querySelector(heading);
+    var b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "tab");
+    b.innerHTML = h.innerHTML;
+    h.hidden = true;
+    b.addEventListener("click", function () {
+      sections.forEach(function (x, j) { x.hidden = i !== j; });
+      tbs.forEach(function (x, j) { x.setAttribute("aria-selected", String(i === j)); });
+      if (cls === "eco-tabs") try { history.replaceState(null, "", "#" + f.id); } catch (e) {}
+    });
+    tbs.push(b);
+    tabs.appendChild(b);
+  });
+  container.insertBefore(tabs, before);
+  return tbs;
+}
+
 (function () {
-  // Without script every format and variant is shown under its own
-  // heading; with it, tabs pick the format and a picker the variant.
-  var install = document.getElementById("install");
-  var fmts = install.querySelectorAll("section.fmt");
-  if (fmts.length > 1) {
-    var tabs = document.createElement("div");
-    tabs.className = "tabs";
-    tabs.setAttribute("role", "tablist");
-    var tbs = [];
-    fmts.forEach(function (f, i) {
-      var h = f.querySelector(".fmt-h");
-      var b = document.createElement("button");
-      b.type = "button";
-      b.setAttribute("role", "tab");
-      b.innerHTML = h.innerHTML;
-      h.hidden = true;
-      b.addEventListener("click", function () {
-        fmts.forEach(function (x, j) { x.hidden = i !== j; });
-        tbs.forEach(function (x, j) { x.setAttribute("aria-selected", String(i === j)); });
-      });
-      tbs.push(b);
-      tabs.appendChild(b);
-    });
-    install.insertBefore(tabs, fmts[0]);
-    tbs[0].click();
+  // Without script every ecosystem, format and variant is shown under its
+  // own heading; with it, tabs pick the ecosystem and the format, and a
+  // picker the variant.
+  var ecos = Array.prototype.slice.call(document.querySelectorAll("section.eco"));
+  if (ecos.length > 1) {
+    var tbs = tabBar("eco-tabs", ecos, ".eco-h", document.getElementById("ecos"), ecos[0]);
+    var pick = ecos.findIndex(function (e) { return "#" + e.id === location.hash; });
+    tbs[pick < 0 ? 0 : pick].click();
+  } else if (ecos.length === 1) {
+    ecos[0].querySelector(".eco-h").hidden = true;
   }
-  fmts.forEach(function (sec) {
-    var variants = sec.querySelectorAll(".variant");
-    if (variants.length < 2) return;
-    var key = sec.getAttribute("data-key");
-    var picker = document.createElement("div");
-    picker.className = "picker";
-    picker.setAttribute("role", "group");
-    picker.setAttribute("aria-label", key);
-    var label = document.createElement("span");
-    label.textContent = key.charAt(0).toUpperCase() + key.slice(1) + ":";
-    picker.appendChild(label);
-    var buttons = [];
-    function show(i) {
-      variants.forEach(function (v, j) { v.hidden = i !== j; });
-      buttons.forEach(function (b, j) { b.setAttribute("aria-pressed", String(i === j)); });
-    }
-    variants.forEach(function (v, i) {
-      v.querySelector("h4").hidden = true;
-      var b = document.createElement("button");
-      b.type = "button";
-      b.textContent = v.getAttribute("data-dist");
-      b.addEventListener("click", function () { show(i); });
-      buttons.push(b);
-      picker.appendChild(b);
+  document.querySelectorAll(".install").forEach(function (install) {
+    var fmts = Array.prototype.slice.call(install.querySelectorAll("section.fmt"));
+    if (fmts.length > 1) tabBar("tabs", fmts, ".fmt-h", install, fmts[0])[0].click();
+    fmts.forEach(function (sec) {
+      var variants = sec.querySelectorAll(".variant");
+      if (variants.length < 2) return;
+      var key = sec.getAttribute("data-key");
+      var picker = document.createElement("div");
+      picker.className = "picker";
+      picker.setAttribute("role", "group");
+      picker.setAttribute("aria-label", key);
+      var label = document.createElement("span");
+      label.textContent = key.charAt(0).toUpperCase() + key.slice(1) + ":";
+      picker.appendChild(label);
+      var buttons = [];
+      function show(i) {
+        variants.forEach(function (v, j) { v.hidden = i !== j; });
+        buttons.forEach(function (b, j) { b.setAttribute("aria-pressed", String(i === j)); });
+      }
+      variants.forEach(function (v, i) {
+        v.querySelector("h4").hidden = true;
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = v.getAttribute("data-dist");
+        b.addEventListener("click", function () { show(i); });
+        buttons.push(b);
+        picker.appendChild(b);
+      });
+      sec.insertBefore(picker, variants[0]);
+      show(0);
     });
-    sec.insertBefore(picker, variants[0]);
-    show(0);
   });
 
   // navigator.clipboard needs a secure context; repositories are often
@@ -468,7 +743,7 @@ function ago(iso) {
     b.setAttribute("aria-label", label);
     b.title = label;
   }
-  install.querySelectorAll("pre").forEach(function (pre) {
+  document.querySelectorAll("main pre").forEach(function (pre) {
     var wrap = document.createElement("div");
     wrap.className = "code";
     pre.parentNode.insertBefore(wrap, pre);
@@ -490,6 +765,27 @@ function ago(iso) {
     wrap.appendChild(b);
   });
 
+  // Rows copy their command without printing it; without script the
+  // buttons stay hidden.
+  document.querySelectorAll(".copy-row").forEach(function (b) {
+    var label = b.textContent, timer;
+    function show(icon, text) {
+      b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + icons[icon] + "</svg><span>" + text + "</span>";
+    }
+    show("Copy", label);
+    b.hidden = false;
+    b.addEventListener("click", function () {
+      function done(icon, text) {
+        show(icon, text);
+        b.classList.add("done");
+        clearTimeout(timer);
+        timer = setTimeout(function () { show("Copy", label); b.classList.remove("done"); }, 1500);
+      }
+      copy(b.getAttribute("data-copy")).then(function () { done("Copied", "copied"); },
+        function () { done("Copy failed", "failed"); });
+    });
+  });
+
   // Relative publish time; the exact time stays in the tooltip and below.
   var pub = document.getElementById("published");
   pub.title = pub.textContent;
@@ -498,7 +794,7 @@ function ago(iso) {
 
 (function () {
   var pills = document.getElementById("pills");
-  var el = document.getElementById("sources");
+  var boxes = document.querySelectorAll(".src[data-kind]");
   function text(tag, s, cls) { var e = document.createElement(tag); if (s != null) e.textContent = s; if (cls) e.className = cls; return e; }
   function pill(cls, s) { var p = text("span", null, "pill " + cls); p.appendChild(text("i")); p.appendChild(document.createTextNode(s)); pills.appendChild(p); return p; }
   // The same page is served at the root, current/ and snapshots/<id>/;
@@ -510,7 +806,6 @@ function ago(iso) {
     if (!r.ok) throw new Error(r.status);
     return r.json();
   }).then(function (s) {
-    el.textContent = "";
     if (s.current_snapshot && s.current_snapshot !== "{{.SnapshotID}}") {
       if (pinned) {
         // Snapshot pages never change, so reloading would not help.
@@ -522,12 +817,11 @@ function ago(iso) {
         pill("warn", "A newer snapshot is published; reload the page");
       }
     }
-    var srcs = s.sources || [];
-    var failing = srcs.filter(function (x) { return x.last_error; }).length;
-    if (failing) pill("bad", failing + " of " + srcs.length + " sources failing");
-    else if (srcs.length) pill("ok", srcs.length === 1 ? "Source syncing" : "All " + srcs.length + " sources syncing");
+    var all = s.sources || [];
+    var failing = all.filter(function (x) { return x.last_error; }).length;
+    if (failing) pill("bad", failing + " of " + all.length + " sources failing");
+    else if (all.length) pill("ok", all.length === 1 ? "Source syncing" : "All " + all.length + " sources syncing");
     if (s.open_conflicts) pill("warn", s.open_conflicts + (s.open_conflicts === 1 ? " open conflict" : " open conflicts"));
-    if (srcs.length === 0) el.appendChild(text("p", "No sync sources configured.", "muted"));
     function row(x) {
       var d = text("div", null, x.last_error ? "bad" : "");
       d.appendChild(text("i"));
@@ -543,16 +837,22 @@ function ago(iso) {
       d.appendChild(box);
       return d;
     }
-    // Failing sources first. With many sources, the healthy ones collapse
-    // into one line that names the oldest success, so a source that stopped
-    // syncing without an error still stands out; expanded, they are listed
-    // oldest first.
-    var bad = srcs.filter(function (x) { return x.last_error; });
-    var good = srcs.filter(function (x) { return !x.last_error; });
-    good.sort(function (a, b) { return (Date.parse(a.last_success) || 0) - (Date.parse(b.last_success) || 0); });
-    if (srcs.length <= 5) {
-      bad.concat(good).forEach(function (x) { el.appendChild(row(x)); });
-    } else {
+    // Each tab lists the sources of its kind. Failing sources first. With
+    // many sources, the healthy ones collapse into one line that names the
+    // oldest success, so a source that stopped syncing without an error
+    // still stands out; expanded, they are listed oldest first.
+    boxes.forEach(function (el) {
+      el.textContent = "";
+      var kind = el.getAttribute("data-kind");
+      var srcs = all.filter(function (x) { return (x.kind || "forge") === kind; });
+      if (srcs.length === 0) { el.appendChild(text("p", "No sync sources for these.", "muted")); return; }
+      var bad = srcs.filter(function (x) { return x.last_error; });
+      var good = srcs.filter(function (x) { return !x.last_error; });
+      good.sort(function (a, b) { return (Date.parse(a.last_success) || 0) - (Date.parse(b.last_success) || 0); });
+      if (srcs.length <= 5) {
+        bad.concat(good).forEach(function (x) { el.appendChild(row(x)); });
+        return;
+      }
       bad.slice(0, 10).forEach(function (x) { el.appendChild(row(x)); });
       if (bad.length > 10) el.appendChild(more("and " + (bad.length - 10) + " more failing", bad.slice(10), "bad"));
       if (good.length) {
@@ -562,11 +862,79 @@ function ago(iso) {
         if (synced.length < good.length) label += ", " + (good.length - synced.length) + " not synced yet";
         el.appendChild(more(label, good, ""));
       }
-    }
+    });
   }).catch(function () {
-    el.textContent = "";
     pill("warn", "Live status unavailable");
-    el.appendChild(text("p", "garner is not reachable. The repository itself still works.", "muted"));
+    boxes.forEach(function (el) {
+      el.textContent = "";
+      el.appendChild(text("p", "garner is not reachable. The repository itself still works.", "muted"));
+    });
+  });
+})();
+(function () {
+  // Without script every list shows in full. With it, a box filters a
+  // list by name and the matches show a page at a time.
+  var pageSize = 25;
+  document.querySelectorAll("section.list").forEach(function (list) {
+    var rows = list.querySelector(".rows");
+    if (!rows) return;
+    var items = Array.prototype.slice.call(rows.querySelectorAll(".row"));
+    var count = list.querySelector(".count");
+    var tools = document.createElement("div");
+    tools.className = "tools";
+    var input = document.createElement("input");
+    input.type = "search";
+    input.className = "filter";
+    input.placeholder = "Filter by name";
+    input.setAttribute("aria-label", "Filter by name");
+    tools.appendChild(input);
+    var pager = document.createElement("div");
+    pager.className = "pager";
+    var prev = document.createElement("button");
+    prev.type = "button";
+    prev.textContent = "Previous";
+    var label = document.createElement("span");
+    label.setAttribute("aria-live", "polite");
+    var next = document.createElement("button");
+    next.type = "button";
+    next.textContent = "Next";
+    pager.appendChild(prev);
+    pager.appendChild(label);
+    pager.appendChild(next);
+    tools.appendChild(pager);
+    rows.parentNode.insertBefore(tools, rows);
+    var none = document.createElement("p");
+    none.className = "muted";
+    none.textContent = "No names match.";
+    none.hidden = true;
+    rows.parentNode.insertBefore(none, rows.nextSibling);
+    var page = 0, matches = items;
+    function render() {
+      var pages = Math.max(1, Math.ceil(matches.length / pageSize));
+      page = Math.min(page, pages - 1);
+      var from = page * pageSize, to = Math.min(from + pageSize, matches.length);
+      items.forEach(function (r) { r.hidden = true; r.classList.remove("first"); });
+      for (var i = from; i < to; i++) matches[i].hidden = false;
+      if (from < to) matches[from].classList.add("first");
+      label.textContent = matches.length ? (from + 1) + "–" + to + " of " + matches.length : "no matches";
+      prev.disabled = page === 0;
+      next.disabled = page >= pages - 1;
+      // The heading's count says how many match; the pager only matters
+      // with more than one page.
+      pager.hidden = pages <= 1;
+      rows.hidden = matches.length === 0;
+      none.hidden = matches.length > 0;
+      count.textContent = "(" + (matches.length === items.length ? items.length : matches.length + " of " + items.length) + ")";
+    }
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      matches = items.filter(function (r) { return !q || r.getAttribute("data-name").toLowerCase().indexOf(q) >= 0; });
+      page = 0;
+      render();
+    });
+    prev.addEventListener("click", function () { page--; render(); });
+    next.addEventListener("click", function () { page++; render(); });
+    render();
   });
 })();
 </script>

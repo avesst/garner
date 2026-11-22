@@ -55,6 +55,19 @@ type Package struct {
 
 	// ServedSize is the size of the served blob.
 	ServedSize int64
+
+	// Blobs are the blobs the package owns besides BlobSHA256, such as an
+	// image's layers (section 19); nil for formats with one file per
+	// package. The publisher sets it.
+	Blobs []string
+}
+
+// Tag is a mutable label on a package, such as an image tag (section 19).
+type Tag struct {
+	Format    string
+	Name      string
+	Tag       string
+	PackageID string
 }
 
 // ServedSHA256 is the blob clients download: the re-signed variant when
@@ -87,6 +100,8 @@ type RenderRequest struct {
 	// History are the <format> directories of earlier snapshots whose
 	// index files must stay reachable (section 9, step 4), newest first.
 	History []string
+	// Tags are the tags on Packages.
+	Tags []Tag
 }
 
 // ClientFile is a generated client configuration file, such as
@@ -177,6 +192,97 @@ type Format interface {
 	// the signed top-level files down to the package files, against the
 	// packages the snapshot serves (garner verify).
 	Verify(ctx context.Context, r *VerifyRequest) []Problem
+}
+
+// BlobPooler is a format whose packages own several blobs (section 19).
+// Each blob is linked once below the pool directory, at BlobPoolPath,
+// whichever packages share it; PoolPath returns the path of BlobSHA256.
+type BlobPooler interface {
+	BlobPoolPath(sha string) string
+}
+
+// Presenter describes a format on the landing page (section 14). The page
+// has one tab per ecosystem: the formats that share a Namespace, such as
+// deb and rpm. A format without it is shown under its own name.
+type Presenter interface {
+	Presentation() Presentation
+}
+
+// Presentation is how the landing page shows a format.
+type Presentation struct {
+	// Ecosystem names the tab of the format's namespace ("Linux
+	// packages"); formats of one namespace give the same one.
+	Ecosystem string
+	// Label and Tool name the format within its tab ("Debian / Ubuntu",
+	// "apt").
+	Label, Tool string
+	// Signed reports whether clients check the format with the
+	// repository key, so its tab shows the key.
+	Signed bool
+}
+
+// Lister is a format that summarizes and lists its packages itself, in
+// place of client files, the count grid and the generic package table
+// (section 19).
+type Lister interface {
+	// Summary is the format's part of its ecosystem's tab. It must stay
+	// small however many packages there are.
+	Summary(c *config.Config, publicURL string, pkgs []*Package, tags []Tag) Summary
+	// Rows list every package name for the list in the format's tab.
+	Rows(c *config.Config, publicURL string, pkgs []*Package, tags []Tag) []Row
+}
+
+// Summary is a format's summary in its ecosystem's tab.
+type Summary struct {
+	// Usage is shell commands showing how clients use the format.
+	Usage string
+	// Stats are headline counts ("images", 12).
+	Stats []Stat
+	// Groups are counts per group of names, such as per top-level
+	// namespace, largest first; More counts the groups left out.
+	Groups []Stat
+	More   int
+}
+
+// Stat is a labelled count.
+type Stat struct {
+	Label string
+	Count int
+}
+
+// Row is one package name in an ecosystem's list.
+type Row struct {
+	Name string
+	// Group orders the rows, such as by namespace; rows without one come
+	// first.
+	Group string
+	// Facts describe the name: versions per distribution, platforms.
+	Facts []Fact
+	// Tags are the newest tags; MoreTags counts the rest, listed at
+	// TagsURL.
+	Tags     []string
+	MoreTags int
+	TagsURL  string
+	// Copy is text a button copies, such as a pull command, with
+	// CopyLabel naming what it copies.
+	Copy, CopyLabel string
+}
+
+// Fact is a labelled detail of a Row.
+type Fact struct {
+	Label, Value string
+}
+
+// RegistryFormat is a format whose packages registry sources deliver,
+// rather than forge sources (section 19).
+type RegistryFormat interface {
+	FromRegistries()
+}
+
+// RetentionDefaulter is a format with its own retention default (section
+// 17), used for packages no source delivered.
+type RetentionDefaulter interface {
+	DefaultRetention(c *config.Config) int
 }
 
 // Registry holds the enabled formats in a fixed order.

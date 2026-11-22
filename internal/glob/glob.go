@@ -1,10 +1,13 @@
-// Package glob checks whether two glob patterns can match the same name.
+// Package glob matches names against glob patterns and checks whether two
+// patterns can match the same name.
 //
 // Patterns use path.Match syntax: '*' matches any run of characters, '?'
 // matches one character, '[...]' matches a character class ('[^...]'
-// negates it), and '\' escapes the next character. Names are package and
-// repository names, which never contain '/', so '*' is treated as matching
-// any character.
+// negates it), and '\' escapes the next character. Unlike path.Match, '*'
+// and '?' also match '/': image names such as team/tool contain it, and
+// owning team/* means owning everything below team/ (design section 8).
+// Match and Overlap share one parser, so a name Overlap reports as
+// matching both patterns is one Match accepts.
 package glob
 
 import (
@@ -23,6 +26,35 @@ func Validate(pattern string) error {
 	}
 	_, err := parse(pattern)
 	return err
+}
+
+// Match reports whether name matches pattern. An invalid pattern matches
+// nothing.
+func Match(pattern, name string) bool {
+	toks, err := parse(pattern)
+	if err != nil {
+		return false
+	}
+	runes := []rune(name)
+	// cur[j]: toks[:i] can match runes[:j].
+	cur := make([]bool, len(runes)+1)
+	cur[0] = true
+	for _, t := range toks {
+		next := make([]bool, len(runes)+1)
+		if t.star {
+			seen := false
+			for j := range cur {
+				seen = seen || cur[j]
+				next[j] = seen
+			}
+		} else {
+			for j := 1; j <= len(runes); j++ {
+				next[j] = cur[j-1] && t.set.contains(runes[j-1])
+			}
+		}
+		cur = next
+	}
+	return cur[len(runes)]
 }
 
 // Overlap reports whether some name matches both a and b. When it does, it

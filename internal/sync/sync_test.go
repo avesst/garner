@@ -25,6 +25,7 @@ import (
 	"github.com/avesst/garner/internal/forge"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/ingest"
+	"github.com/avesst/garner/internal/server"
 	"github.com/avesst/garner/internal/store"
 )
 
@@ -802,5 +803,21 @@ func TestPendingReleaseRetriedWhenListingUnchanged(t *testing.T) {
 	f.sync()
 	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool 2.0") {
 		t.Errorf("placed %q, want 2.0 retried", got)
+	}
+}
+
+// The status tells forge and registry sources apart, so the landing page
+// lists each under its ecosystem.
+func TestStatusKind(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	cfg := *f.cfg
+	cfg.Sources = append(cfg.Sources, config.Source{Name: "img", Registry: "r", Image: "a/b", Tags: []string{"*"}})
+	f.live.Store(&cfg)
+	kinds := map[string]string{}
+	for _, s := range f.m.Status(context.Background()) {
+		kinds[s.Name] = s.Kind
+	}
+	if kinds["tool"] != server.KindForge || kinds["img"] != server.KindRegistry {
+		t.Errorf("kinds %v", kinds)
 	}
 }

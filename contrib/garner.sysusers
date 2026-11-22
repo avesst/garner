@@ -1,2 +1,2 @@
 # garner's system user and group (sysusers.d(5)).
-u garner - "garner package repository" /var/lib/garner
+u garner - "garner repository" /var/lib/garner

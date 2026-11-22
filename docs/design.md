@@ -5,12 +5,17 @@ updated 2026-11-14 with choices made during implementation.
 
 ## 1. Purpose
 
-garner serves an internal Linux package repository for `.deb` and `.rpm`
-packages. It accepts packages from two places:
+garner is an internal repository for packages and container images. Its
+core is format-agnostic (section 17); the formats today are `.deb` and
+`.rpm` packages, served as signed apt and dnf repositories, and OCI images,
+served as a registry (section 19). It accepts packages from two places:
 
 - uploads, typically from CI pipelines;
 - release assets synced from GitHub, GitHub Enterprise Server, GitLab and
   Forgejo/Gitea, from single repositories or from whole organizations/groups.
+
+Images arrive the same two ways: pushed with `docker push`, and synced from
+registries such as ghcr.io and Docker Hub.
 
 The MVP is one process with SQLite and local disk, for a homelab and for an
 internal enterprise repository behind a reverse proxy. Multiple nodes on
@@ -31,8 +36,9 @@ PostgreSQL come later (section 18).
 
 - Mirroring upstream distributions (Pulp and aptly cover this).
 - Building packages from source.
-- Formats other than deb and rpm in the MVP. More formats are expected later;
-  section 17 lists what the MVP must not rule out.
+- Formats other than deb and rpm in the MVP. OCI images came after it
+  (section 19), and more are expected; section 17 lists what the core must
+  not rule out.
 - Per-client filtering of repository contents.
 
 ## 2. Terminology
@@ -109,6 +115,7 @@ Multiple nodes and separate roles are later extensions (section 18).
 /rpm/<release>/<basearch>/pool/...       rpm package files
 /snapshots/<id>/deb/...   a specific snapshot, for pinning
 /snapshots/<id>/rpm/...
+/v2/...                   OCI registry, with the oci section (section 19)
 /healthz /readyz /metrics
 /api/v1/...
 ```
@@ -395,6 +402,13 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `snapshot_formats` | `snapshot_id`, `format` | The formats a snapshot rendered. A rollback changes placements only for these. |
 | `tokens` | `id`, `name`, `owner`, `scopes`, `hash`, `created_at`, `last_used_at`, `revoked_at` | sha256 of a 256-bit random secret. |
 | `events` | `id`, `at`, `actor`, `action`, `detail` | Audit log. Later, not in the MVP (section 15). |
+| `package_blobs` | `package_id`, `sha256` | Further blobs a package owns, such as an image's layers (section 19). |
+| `tags` | `repository_id`, `format`, `name`, `tag` PK, `package_id`, `updated_at`, `updated_by` | Mutable labels on packages: image tags. |
+| `snapshot_tags` | `snapshot_id`, `format`, `name`, `tag`, `package_id` | The tags a snapshot served, for rollback. |
+| `staged_blobs` | `sha256` PK, `expires_at` | Blobs a push or sync stored before a package references them; GC keeps them until `expires_at`. |
+| `uploads` | `id`, `format`, `name`, `size`, `created_at`, `updated_at` | Blob upload sessions of pushes in progress. |
+| `source_tags` | `source`, `repo`, `tag` PK, `digest`, `applied_at` | The upstream digest a registry source's tag was last applied from. |
+| `source_tag_candidates` | `source`, `repo`, `tag`, `digest` PK, `first_seen` | Digests seen under a tag, for `min_release_age`. |
 
 Versions are compared with dpkg and rpmvercmp semantics, implemented in Go.
 The database never sorts versions.
@@ -628,7 +642,12 @@ when another file of the same version is already in the distribution.
   upgrade. `Provides` is not checked: virtual names such as `webserver`
   have many providers, and clients prefer a real package of that name.
   Packages stored before this rule are not re-checked.
-- `owns:` globs in a source reserve names. On reload, a reservation that
+- `owns:` globs in a source reserve names. In a glob, `*` and `?` match any
+  character, `/` included, so `team/*` reserves every image below `team/`;
+  validation's overlap check and ingest use the same matcher. A source
+  reserves names only in the namespaces of what it delivers: forge sources
+  package names (`os`), registry sources image names (`oci`), so the same
+  glob in one of each is no conflict (section 19). On reload, a reservation that
   conflicts with an existing database owner wins for future deliveries.
   Existing packages stay, and the conflict is reported.
 - Reservations of different sources must not overlap. If any name could
@@ -896,18 +915,42 @@ the configuration and database are reachable. The others call the API with
 
 ### Landing page
 
-A static page, rendered into each snapshot at publish (section 4). Its
-static part describes that snapshot only:
+A static page, rendered into each snapshot at publish (section 4). It is
+organized by ecosystem: the enabled formats of one namespace (deb and rpm
+are "Linux packages", oci "Container images"). Each ecosystem is a tab;
+with one ecosystem there is no tab bar, and without script every
+ecosystem is shown one below the other. The core takes labels and
+content from format hooks (`Presenter`, `Lister`) and never branches on
+a format name.
 
-- install commands for the key and sources (deb822 and `.repo`);
-- package counts per format, distribution and architecture;
-- time of the publish;
-- configuration hash and commit the snapshot was published with.
+A tab starts with a summary:
 
-A live status section shows state that changes without a publish: per-source
-last sync and error state, and open conflicts. A small inline script fetches
-it from `GET /api/v1/status`. When garner is not reachable, for example while
-the proxy serves `public/` and garner is stopped, the section says that the
+- how to use it: install commands for the key and sources (deb822 and
+  `.repo`), or how to pull and push images;
+- what it holds: package counts per format, distribution and
+  architecture, or images, tags, platforms and images per top-level
+  namespace (the 12 largest);
+- the signing key, in the tabs of formats clients check with it;
+- the health of the sync sources that deliver it.
+
+Below the summary the tab lists everything: each package name with its
+versions per distribution and architecture, or each image with its
+newest five tags (the rest at `/v2/<name>/tags/list`), platforms and a
+button that copies its pull command. The page's script shows the list 25 names at a time, with
+a filter box that narrows it before paging, so a tab stays short however
+many packages there are. Without script the list shows in full. The
+whole list is in the page, so `index.html` grows with the number of
+names: about 150 KB for 500 images.
+
+The header shows the publish time and one health line for all sources
+and open conflicts; the snapshot ID, publish time, configuration hash
+and commit are one line in the page footer.
+
+The live parts, source health and conflicts, are state that changes
+without a publish. A small inline script fetches them from
+`GET /api/v1/status`, whose `kind` (`forge` or `registry`) places each
+source under its ecosystem. When garner is not reachable, for example
+while the proxy serves `public/` and garner is stopped, they say that the
 status is unavailable; the rest of the page still works.
 
 There are no download statistics, no login and no write actions.
@@ -936,8 +979,8 @@ There are no download statistics, no login and no write actions.
 - Named and aggregate repositories.
 - Built-in git config fetch.
 - Helm chart.
-- Further package formats, for example npm, PyPI, Ansible collections and OCI
-  (section 17).
+- Further package formats, for example npm, PyPI and Ansible collections
+  (section 17). OCI images are designed in section 19.
 - Exclusions in `owns:` (`["tool-*", "!tool-cli"]`), so one source can
   reserve a pattern while another owns an exception. The overlap check
   (section 8) takes exclusions into account.
@@ -974,7 +1017,7 @@ of them, not just the formats that resemble deb and rpm.
 | npm | Registry JSON (packuments); `npm publish` is a JSON PUT | Mostly: packuments and tarballs are files, but scoped names (`@scope%2fname`) need care behind nginx | None; npm uses provenance and registry signatures instead | semver; dist-tags |
 | PyPI | Simple API (PEP 503/691); `twine upload` uses the legacy multipart API | Yes | None; PEP 740 attestations | PEP 440 |
 | Ansible | Galaxy API v3 | Possibly, if the API responses are pre-rendered; unverified | None | semver |
-| OCI | Distribution spec, `/v2/` at the host root | No: tag resolution, `HEAD`, content negotiation and push need a live API | Separate artifacts (cosign, notation) | Tags are unordered |
+| OCI | Distribution spec, `/v2/` at the host root | Pulls yes, with `Content-Type` set per manifest type; push needs a live API (section 19) | Separate artifacts (cosign, notation) | Tags are unordered |
 
 ### Constraints on the MVP
 
@@ -1018,8 +1061,9 @@ of them, not just the formats that resemble deb and rpm.
   source. Asset rules will need a format-aware target in place of
   `suite`/`release`.
 
-Of the examples, OCI fits the current design least: it needs live endpoints,
-and its blobs and manifests behave differently from the package pool.
+Of the examples, OCI fits the current design least: push needs live
+endpoints, and an image is many shared blobs under mutable tags. Section 19
+designs it.
 
 ## 18. Multiple nodes (later)
 
@@ -1082,3 +1126,289 @@ is stopped, a proxy serving `public/` from disk keeps serving it.
 - **One swap point.** Publish ends in a single `rename(2)` of
   `public/current` (section 9), which is the one place a fencing check will
   guard.
+
+## 19. OCI images (after 0.1.0)
+
+Built after 0.1.0 (`internal/oci`); `docs/plan.md` records what is
+verified. garner stores container images (OCI and Docker schema 2
+manifests and indexes), accepts them by `docker push` and `podman push`,
+syncs selected images from other registries, and serves pulls from the
+snapshot as it serves deb and rpm. It is not a pull-through cache: only
+images pushed to garner or named by a source are stored (section 1).
+
+### Model
+
+- A package is one manifest or image index: format `oci`, name the
+  repository path (`team/tool`), version the manifest digest
+  (`sha256:<hex>`), arch empty. Versions are immutable, so the content
+  check (section 7) never fires, and a moved tag is not a conflict.
+  `Compare` orders by push time.
+- Ingest records an image through `Record`, which takes a package whose
+  blobs are stored already: the content check, ownership, placement and
+  the publish request are those of an upload.
+- Tags are mutable labels on a package, in a new table `tags`
+  (`repository_id`, `format`, `name`, `tag`, `package_id`, `updated_at`,
+  `updated_by`). npm dist-tags would use the same table. A snapshot records
+  the tags it served in `snapshot_tags`, so a rollback restores them.
+- A package owns several blobs: its manifest, its config and layers, and
+  for an index its child manifests and their blobs. A new table
+  `package_blobs` (`package_id`, `sha256`) lists them, and GC and verify
+  follow it. `blob_sha256` is the manifest itself. deb and rpm packages
+  have no rows there.
+- Child manifests of an index are blobs of the index's package, not
+  packages of their own. A manifest pushed by digest that no tag reaches is
+  collected after `oci.upload_expiry`.
+- Blobs stored before a package references them, the layers and child
+  manifests of a push or a sync, are kept by `staged_blobs` until
+  `oci.upload_expiry`; GC otherwise deletes every unreferenced blob. A
+  `HEAD` that lets a pushing client skip a staged layer extends its stage.
+- A finished upload is copied into a new blob file, never linked: a
+  request still writing to the session can then only make the digest
+  check fail, not change a stored blob.
+- Layers are stored once in the blob store, whichever images and names use
+  them: OCI digests are sha256, the store's key.
+- Ownership uses the namespace `oci`. A name's owner owns the whole
+  repository path, and `owns:` globs reserve names as for packages. For
+  names with `/`, `*` matches `/` too, as the overlap check (section 8)
+  already assumes.
+- Names with a path component `blobs`, `manifests`, `tags`, `uploads` or
+  `referrers` are refused, so that one name's files never sit inside
+  another's in the static tree (`a/blobs` against the blobs of `a`).
+- OCI has no distributions. It uses one implicit distribution, `default`,
+  which no request or configuration names.
+- Retention: every tagged package is kept, plus the `oci.retention` newest
+  untagged ones per name (default 10; a registry source's own `retention`
+  when it sets one, never `defaults.retention`) and pinned ones. Tagged
+  packages do not count towards it. Deployments pin
+  digests, so a moved `latest` must not break the digest it pointed at
+  before.
+
+### Serving
+
+Clients require `/v2/` at the host root. garner's own server answers all of
+`/v2/`: manifests and tag lists from the current snapshot's tree, blobs
+from the pool, with `Content-Type`, `Docker-Content-Digest` and range
+requests set as clients expect. The README's proxy examples forward
+`/v2/` to garner. Under systemd the listening socket survives a restart,
+so pulls wait rather than fail.
+
+The snapshot tree is laid out so that a proxy could serve pulls itself.
+That split, below, is not shipped as a tested proxy configuration:
+
+| Request | Served from |
+|---|---|
+| `GET /v2/` | garner (authentication check) |
+| `GET`/`HEAD /v2/<name>/manifests/<tag or digest>` | `public/`, rendered per snapshot |
+| `GET /v2/<name>/tags/list` | `public/`, rendered per snapshot |
+| `GET`/`HEAD /v2/<name>/blobs/<digest>` | `public/`, the pool |
+| `POST`, `PATCH`, `PUT`, `DELETE` under `/v2/`, and `GET /v2/<name>/blobs/uploads/...` | garner |
+
+```
+snapshots/<id>/oci/v2/<name>/manifests/<tag>.<kind>
+snapshots/<id>/oci/v2/<name>/manifests/sha256:<hex>.<kind>
+snapshots/<id>/oci/v2/<name>/tags/list
+snapshots/<id>/oci/v2/<name>/blobs -> (relative) pool/oci
+pool/oci/sha256:<hex>              hardlinks into blobs/
+public/v2 -> current/oci/v2        fixed link
+```
+
+- `<kind>` names the media type (`oci-index`, `oci-manifest`,
+  `docker-list`, `docker-manifest`). A static server picks `Content-Type`
+  from the file name, and clients reject a manifest served with the wrong
+  one. A proxy would try each suffix and map it to its media type (nginx
+  `try_files` and `types`), as garner's own server does. Blobs are
+  served as `application/octet-stream`.
+- Static files carry no `Docker-Content-Digest` header; clients would
+  hash what they receive.
+- A pushed tag can be pulled after the next publish, which is debounced
+  (section 3). `docker push` does not read it back. A `HEAD` on a blob
+  also finds blobs a push staged, so layers garner has are not sent
+  again; their content is served only once an image using them is
+  published. Other stored blobs, such as a held package's, are never
+  served under `/v2/`, and a push can neither mount them nor refer to
+  them from a manifest: a push may use only blobs it sent, ones staged
+  by another push or a sync, and ones of published images.
+- `/snapshots/<id>/` is not a registry root, so there is no snapshot
+  pinning for images. Digests pin.
+- Reading is open, as for deb and rpm (section 11). Blobs are shared
+  between names, so any blob can be fetched under any name.
+- cosign signatures stored under its tag scheme (`sha256-<hex>.sig`) are
+  ordinary tags. The OCI 1.1 referrers API comes later; it can be rendered
+  statically too.
+
+### Push
+
+garner implements the push half of the OCI distribution spec.
+
+- Blob uploads: `POST /v2/<name>/blobs/uploads/` starts a session, or
+  finishes in one request with `?digest=`, or reuses a stored blob with
+  `?mount=<digest>&from=<name>`. `PATCH` appends a chunk, which must start
+  where the last ended (`416` otherwise). `PUT ?digest=` finishes, `GET`
+  reports progress, `DELETE` cancels.
+- A session is a row in a new table `uploads` (`id`, `repository_id`,
+  `format`, `name`, `size`, `created_at`, `updated_at`) and a file under
+  `uploads/<id>` in storage, so another node can continue it (section 18).
+  On finish the digest is checked and the file stored as a blob (section 7,
+  step 1).
+- `PUT /v2/<name>/manifests/<ref>` parses the manifest and checks its media
+  type against the body. Every blob and child manifest it references must
+  be stored (`MANIFEST_BLOB_UNKNOWN` otherwise). A `PUT` by tag records the
+  package if new and points the tag at it; a `PUT` by digest stores the
+  manifest only. Ownership is checked (section 8) and a publish requested.
+- Ownership is checked when a session starts too, so a push to another
+  owner's name is refused (`DENIED`, naming the owner) before layers are
+  sent.
+- Limits: each blob `storage.max_package_size`, each manifest 4 MiB.
+- `DELETE /v2/<name>/manifests/<tag>` removes a tag; by digest it removes
+  the package from future snapshots, like `garner remove`. Both need
+  `admin`.
+- GC deletes blobs that no package references only after
+  `oci.upload_expiry` (default 24 h), and stale sessions then too. Without
+  this, GC would delete the layers of a push in progress.
+
+Authentication:
+
+- `docker login -u <token name>` with the secret as password: the API's
+  Basic credentials, with the same https and trusted-proxy rule (section
+  11). Push needs `upload`.
+- `/v2/` uses the distribution spec's token flow. `GET /v2/` without
+  credentials, and a push without them, answer `401` with
+  `WWW-Authenticate: Bearer realm="<public_url host>/v2/token",service="garner"`
+  (a push adds its `scope`). `GET /v2/token` gives a client without
+  credentials an anonymous token, which passes `GET /v2/` and nothing
+  else. With Basic credentials it checks them under the rule above and
+  answers `401` for a bad token, so `docker login` fails; a good one gets
+  a token that carries the credentials, checked again on each request,
+  so any node can check it (section 18). `/v2/` also takes Basic
+  credentials directly.
+- Manifests and blobs never ask for credentials, so anonymous pulls
+  work. A `Basic` challenge on `GET /v2/` would stop them with Docker's
+  classic image store, which refuses a Basic challenge it has no
+  credentials for; the containerd image store, skopeo (podman's
+  library) and crane tolerate it.
+
+### Sync from registries
+
+```yaml
+oci:
+  retention: 10               # untagged manifests kept per name
+  upload_expiry: 24h
+
+registries:
+  - name: ghcr
+    url: https://ghcr.io
+    username: avesst
+    token_env: GHCR_TOKEN
+  - name: dockerhub
+    url: https://registry-1.docker.io
+    auth_hosts: [auth.docker.io]
+  - name: gitlab-intern
+    url: https://registry.gitlab.example.com
+    auth_hosts: [gitlab.example.com]
+    token_file: /run/secrets/gitlab-registry
+
+sources:
+  - name: tool-image
+    registry: ghcr
+    image: avesst/tool
+    tags: ["v*", "latest"]
+    as: tool                  # local name; default the image path
+    owns: ["tool"]
+```
+
+- A source names a `registry` in place of a `forge`. Polling, `owns`,
+  `retention`, `approval`, `min_release_age` and status work as for forge
+  sources.
+- Each poll lists the image's tags (paginated with `Link`), keeps those
+  matching `tags`, and resolves each with `HEAD` on its manifest. Only
+  digests garner has not stored are downloaded. A tag that moved upstream
+  moves locally; its old digest becomes untagged and retention applies.
+- The first run takes every matching tag, so `tags` should be narrow.
+- A tag moves only when upstream moves it away from the digest it was
+  last applied from (`source_tags`). A rollback, or an admin deleting the
+  tag, therefore holds until upstream points the tag at a new digest.
+- `min_release_age` runs from when garner first saw a digest under a tag.
+  Registries record no push time, and an image's `created` field is often
+  fixed (reproducible builds set it to the commit time or 1970). Every
+  digest seen under a tag is a candidate (`source_tag_candidates`); a poll
+  applies the newest candidate that is old enough, fetched by digest, and
+  drops the older ones. A tag that upstream moves more often than the
+  minimum age therefore still advances, one aged digest at a time, as a
+  forge source applies the newest release that is old enough. A candidate
+  first seen after the digest upstream points at now was withdrawn
+  upstream and is dropped, as are all candidates when upstream is back on
+  the applied digest. A candidate is dropped as gone only when its
+  manifest returns 404. The newest waiting candidate shows in status as a
+  deferred release. A processed digest is recorded in `seen_releases`.
+- Tag state (`source_tags`, `source_tag_candidates`) is kept per local
+  name, so changing a source's `as` syncs its images under the new name.
+- With `approval: manual` a new digest is held without its tag; once
+  approved, the next poll points the tag at it. A held digest is not
+  fetched again and its blobs are not staged, so pushes can't use them;
+  sync stages only blobs no package owns yet, and unstages a held image's
+  blobs once it is recorded.
+- Two registry sources may not serve images under one local name.
+- A tag deleted upstream stays in garner.
+- A processed digest that is no longer placed under the local name
+  (retention, a rollback or a delete removed it) is not synced again, as a
+  processed forge release is never ingested twice.
+- Each registry has one client, shared by its sources and rebuilt on
+  reload so rotated tokens apply, so `max_concurrent` holds across the
+  sources of one node. A 429 is waited out once when its
+  `Retry-After` is at most 2 minutes; a longer limit fails the poll.
+- A whole index is copied, all platforms included, so digests and
+  signatures stay valid. Filtering platforms would rewrite the index and
+  change its digest.
+- Every manifest and blob is checked against its digest as it is stored.
+- The registry client is local, like the forge clients. It follows the
+  `Bearer` challenge to the token endpoint, anonymously or with the
+  configured credentials, and sends `Accept` for all four manifest types.
+- Credentials go to the registry's own host and to a token endpoint only
+  on that host or in `auth_hosts`, never to a host a response names.
+  Blob downloads that redirect to another host (ghcr.io and Docker Hub
+  redirect to their CDNs) are fetched without credentials, as forge links
+  are (section 7).
+- `max_concurrent`, `ca_file`, `proxy` and `Retry-After` handling work as
+  for forges. Docker Hub limits anonymous pulls per address, so a Docker
+  Hub registry should have credentials.
+
+### Format interface
+
+- A format with live routes gets a handler at the host root (`/v2/`); the
+  server rejects prefixes that overlap garner's own routes or each other
+  (section 17).
+- A package can own several blobs. The core links each into
+  `pool/<format>/` at a path the format returns per blob, and GC,
+  `snapshot_packages.served_sha256` (the manifest digest) and verify cover
+  them all.
+- The core stores tags and records them per snapshot; the format renders
+  them.
+- Ingest accepts a parsed package and its blobs from a format's live
+  handlers and from sync, so push, sync and upload share the ownership,
+  conflict and publish steps. `PUT /api/v1/upload` does not take images.
+- Methods about distributions, architectures and client files return
+  nothing for oci; `DistributionKey` is empty, so upload ignores it.
+- Optional interfaces carry the rest, so deb and rpm are unchanged:
+  `BlobPooler` (blobs pooled by digest), `RetentionDefaulter`,
+  `RegistryFormat` (delivered by registry sources) and `Lister` (its own
+  landing page section).
+
+### Verification and landing page
+
+- `garner verify` checks that every tag and digest file parses, that its
+  digest, suffix and media type agree with the database and the
+  snapshot's tags, that `tags/list` lists exactly those tags, and that
+  every blob a package references is in the pool with its recorded size.
+- The landing page has a Container images tab (section 14): how to pull
+  and push, with the host taken from `server.public_url`, and counts of
+  images, tags, platforms and images per top-level namespace, then every
+  image, paged and filterable. Clients need https, or the host in
+  their `insecure-registries`.
+
+### Later
+
+- Image upload as an archive (`docker save`, `oci-archive`) through
+  `PUT /api/v1/upload`.
+- The referrers API.
+- cosign verification at sync (section 15, Sigstore).
+- Platform filtering at sync, accepting the changed digest.

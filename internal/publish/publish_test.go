@@ -287,7 +287,7 @@ func TestRetainLeavesDisabledFormatAlone(t *testing.T) {
 		{Format: "deb", Name: "app", Version: "1.0", Distribution: "stable", Arch: "amd64"},
 		{Format: "rpm", Name: "app", Version: "1.0", Release: "1", Distribution: "stable", Arch: "x86_64"},
 	}
-	keep, drop := f.pub.retain(f.cfg, pkgs)
+	keep, drop := f.pub.retain(f.cfg, pkgs, nil)
 	if len(keep) != 1 || keep[0].Format != "deb" {
 		t.Errorf("keep = %v, want only the deb", keep)
 	}
@@ -706,7 +706,7 @@ func TestGCGraceOfSnapshotNeverCurrent(t *testing.T) {
 	f.publish(t)
 	leftover := func(age time.Duration) string {
 		s := &store.Snapshot{ID: id.New(), CreatedAt: store.FormatTime(time.Now().Add(-age))}
-		if err := f.pub.Store.Tx(ctx, func(q *store.Queries) error { return q.InsertSnapshot(ctx, s, nil) }); err != nil {
+		if err := f.pub.Store.Tx(ctx, func(q *store.Queries) error { return q.InsertSnapshot(ctx, s, nil, nil) }); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.MkdirAll(filepath.Join(f.root, "snapshots", s.ID), 0o755); err != nil {

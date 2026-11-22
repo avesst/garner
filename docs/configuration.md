@@ -17,7 +17,7 @@ where to sync from and how to sign. Everything garner learns while running
   `*_env` key.
 
 Every key is optional unless marked **required**. A key you leave out keeps
-its default. The format sections, `deb` and `rpm`, are the exception: a
+its default. The format sections, `deb`, `rpm` and `oci`, are the exception: a
 format is enabled by its section being present, and at least one is
 required. An empty section (`deb:` or `deb: {}`) enables the format with
 the defaults below.
@@ -36,7 +36,7 @@ the defaults below.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `listen` | listen address | `:8080` | Where the HTTP server listens. Changing it needs a restart. |
-| `public_url` | URL, **required** | none | The URL apt and dnf clients use. It goes into the client files and the landing page. Must be an absolute `http` or `https` URL without a query or fragment. A path is allowed, for example `https://example.com/garner/`. |
+| `public_url` | URL, **required** | none | The URL clients use. It goes into the apt and dnf client files and the landing page, and its host is the registry host that image names start with. Must be an absolute `http` or `https` URL without a query or fragment. A path is allowed, for example `https://example.com/garner/`. |
 | `client_name` | name | `garner` | Prefix of the files clients install: `<name>.sources`, `<name>.repo`, `/usr/share/keyrings/<name>.gpg`, and the dnf repo ID. Lowercase letters, digits, `.`, `_` and `-`; must start with a letter or digit. |
 | `trusted_proxies` | list of IPs or CIDR prefixes | `[]` | Reverse proxies whose `X-Forwarded-*` headers are honoured. Authenticated requests are accepted only from loopback, or from one of these with `X-Forwarded-Proto: https`. Others get `403`. |
 | `allow_insecure_auth` | bool | `false` | Accept authenticated requests over plain HTTP from any address. Tokens then travel unencrypted, so use this only on an isolated lab network. |
@@ -119,6 +119,20 @@ of a disabled format are rejected.
 | `architectures` | list | `[x86_64]` | rpm architectures to publish. Lowercase letters, digits and `_`. Don't list `noarch`; it is implicit, as `all` is for deb. `i686` is multilib: its packages are listed in the x86_64 repository, where dnf on x86_64 hosts finds them, so it requires `x86_64` and gets no repository of its own. |
 | `releases` | list | `[stable]` | Releases to publish. Same rules and default handling as `deb.suites`. |
 
+## `oci`
+
+Present: garner is a container registry at `/v2/` on the host root, which
+`docker push`, `docker pull` and other OCI clients use. Absent: images are
+disabled. Images are pushed or synced from registries, never uploaded with
+`garner upload`. Pushes need a token with the `upload` scope, used with
+`docker login <host> -u <token name>` and the token's secret as the
+password.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `retention` | integer | `10` | Untagged manifests kept per image name, newest first, besides every tagged one. A manifest becomes untagged when its tag moves to a newer push; deployments that pin digests keep working until it ages out. `0` keeps all. Also applies to images from a registry source that does not set its own `retention`; `defaults.retention` does not apply to images. |
+| `upload_expiry` | duration | `24h` | How long a pushed blob that no manifest uses yet, and an idle upload session, are kept before GC removes them. Must be at least `1m`. |
+
 ## `defaults`
 
 Settings for every source that does not override them. `retention` also
@@ -154,11 +168,36 @@ For a private repository, set `url` to the address the forge puts in its
 asset links (Forgejo's `ROOT_URL`, GitLab's `external_url`); otherwise the
 downloads fail without the token and are retried on every poll.
 
+## `registries`
+
+A list of OCI registries that registry sources sync images from. There are
+none by default.
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `name` | name, **required** | none | Name that sources refer to. Same rules as forge names. |
+| `url` | https URL, **required** | none | The registry's address without a path, such as `https://ghcr.io` or, for Docker Hub, `https://registry-1.docker.io`. Must be `https`. |
+| `username` | string | empty | User name sent with the token. Needs `token_env` or `token_file`. |
+| `token_env` | variable name | empty | Environment variable holding the password or token. |
+| `token_file` | path | empty | File holding the password or token; surrounding whitespace is trimmed. Set `token_env` or `token_file`, not both. With neither, garner pulls anonymously. |
+| `auth_hosts` | list of hosts | `[]` | Hosts besides the registry's own that may receive the credentials as token endpoints: `auth.docker.io` for Docker Hub, the GitLab host for a GitLab registry. ghcr.io needs none. |
+| `ca_file` | path | empty | As for forges. |
+| `max_concurrent` | integer | `4` | As for forges. |
+| `proxy` | URL | empty | As for forges. |
+
+Credentials go only to the registry's host and to a token endpoint on it or
+in `auth_hosts`. A registry that names another token endpoint gets an
+error, not the credentials. Blob downloads redirected to other hosts, as
+ghcr.io and Docker Hub do to their CDNs, are fetched without credentials.
+Docker Hub limits anonymous pulls per address, so give a Docker Hub
+registry credentials.
+
 ## `sources`
 
-A list of places to sync releases from. There are none by default. A source
+A list of places to sync from. There are none by default. A forge source
 is one repository (`repo`), a GitHub or Forgejo organization (`org`), or a
-GitLab group (`group`). Set exactly one of the three.
+GitLab group (`group`); set exactly one of the three. A registry source is
+one image of a registry; see [Registry sources](#registry-sources).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
@@ -187,6 +226,55 @@ Some asset names are always skipped: `*.src.rpm`, `*-dbgsym*` and
 On its first run, a source syncs only the latest release of each repository
 (with `min_release_age`, the latest that is old enough). Later runs pick up
 every release published since then.
+
+### Registry sources
+
+A registry source sets `registry` in place of `forge`:
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `registry` | registry name, **required** | none | The `registries[].name` to sync from. |
+| `image` | image name, **required** | none | The image's path on the registry, such as `avesst/tool` or, on Docker Hub, `library/alpine`. |
+| `tags` | list of globs, **required** | none | Tags to sync. Every matching tag is synced on the first run, so keep them narrow (`v*`, `latest`). |
+| `as` | image name | `image` | The name the image is served under. |
+
+`owns`, `retention`, `poll_interval`, `approval` and `min_release_age`
+work as for forge sources; `repo`, `org`, `group`, `assets`, `include`,
+`exclude`, `checksums`, `archived`, `forks` and `recursive` are not
+allowed. A registry source's `owns` reserves image names, and a forge
+source's reserves package names, so the same glob in both is no
+conflict.
+
+Each poll lists the image's tags and resolves the matching ones. A digest
+garner has not stored is downloaded whole, every platform of an index
+included, and every blob is checked against its digest. A tag that moves
+upstream moves in garner too; the digest it pointed at becomes untagged
+and is kept per `retention`. A tag deleted upstream stays in garner. A
+digest garner has processed is never synced again once it is removed,
+whether by retention, `garner snapshot rollback` or a delete, so a
+rollback holds until the tag moves upstream to a new digest.
+
+With `min_release_age`, the wait runs from when garner first saw the
+digest under the tag: registries record no push time, and an image's own
+creation time is often fixed. Each poll applies the newest digest seen
+under the tag that is old enough, so a tag that upstream moves more often
+than the minimum age still advances, lagging by about that age. A digest
+upstream withdraws, by moving the tag back to an earlier one before it is
+old enough, is dropped and never applied.
+`garner sync <source> --ignore-age <tag>` lets the waiting digests of a
+tag through.
+
+A tag moves only when upstream moves it. After `garner snapshot
+rollback`, or after an admin deletes the tag, it stays as it is until
+upstream points it at a new digest.
+
+Two registry sources may not serve images under the same name. Changing
+a source's `as` syncs its images under the new name on the next poll;
+the old name keeps its images and tags until you remove them with
+`garner remove`.
+
+With `approval: manual`, a new digest is held without its tag; after
+`garner approve`, the next poll points the tag at it.
 
 ### Asset rules
 
@@ -264,10 +352,10 @@ active until you restart:
 - `metrics.listen`
 - `database.url`
 - `storage.path`
-- adding or removing a format section (`deb`, `rpm`)
+- adding or removing a format section (`deb`, `rpm`, `oci`)
 
 A reload restarts only the sources whose effective settings changed,
-including inherited defaults and their forge's settings. The others keep
+including inherited defaults and their forge's or registry's settings. The others keep
 their schedule.
 
 ## Example

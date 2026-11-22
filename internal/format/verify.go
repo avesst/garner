@@ -49,4 +49,6 @@ type VerifyRequest struct {
 	// Keys are the keys the snapshot publishes; signatures must verify
 	// with them.
 	Keys *signing.PublicKeyring
+	// Tags are the tags the snapshot serves.
+	Tags []Tag
 }

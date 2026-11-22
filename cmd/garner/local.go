@@ -40,6 +40,10 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer a.Close()
+	if err := attachLive(a); err != nil {
+		fmt.Fprintf(stderr, "garner: %v\n", err)
+		return 1
+	}
 	if err := startSync(a); err != nil {
 		fmt.Fprintf(stderr, "garner: %v\n", err)
 		return 1

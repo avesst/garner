@@ -59,6 +59,9 @@ type App struct {
 
 	// Syncer is set by the sync package when sources are configured.
 	Syncer server.Syncer
+	// Live are handlers formats serve at the host root, by path prefix
+	// (section 17).
+	Live map[string]http.Handler
 
 	keys     atomic.Pointer[signing.Keyring]
 	logBase  atomic.Pointer[slog.Handler]
@@ -411,7 +414,7 @@ func (a *App) Server() *server.Server {
 		Store: a.Store, Formats: a.Formats, Ingester: a.Ingester, Publisher: a.Publisher,
 		Scheduler: a.Scheduler, Syncer: a.Syncer, Config: a.Config, ConfigCommit: a.ConfigCommit,
 		Reload: a.Reload, Metrics: a.Metrics, Root: a.Config().Storage.Path, Version: a.Version,
-		Log: a.Log, MetricsSeparate: a.Config().Metrics.Listen != "",
+		Log: a.Log, MetricsSeparate: a.Config().Metrics.Listen != "", Live: a.Live,
 	}
 }
 

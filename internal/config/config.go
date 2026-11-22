@@ -28,11 +28,13 @@ type Config struct {
 	Signing  Signing  `yaml:"signing"`
 	// Deb and RPM are nil when the file has no such section: a format is
 	// enabled by its section being present.
-	Deb      *Deb     `yaml:"deb"`
-	RPM      *RPM     `yaml:"rpm"`
-	Defaults Defaults `yaml:"defaults"`
-	Forges   []Forge  `yaml:"forges"`
-	Sources  []Source `yaml:"sources"`
+	Deb        *Deb       `yaml:"deb"`
+	RPM        *RPM       `yaml:"rpm"`
+	OCI        *OCI       `yaml:"oci"`
+	Defaults   Defaults   `yaml:"defaults"`
+	Forges     []Forge    `yaml:"forges"`
+	Registries []Registry `yaml:"registries"`
+	Sources    []Source   `yaml:"sources"`
 
 	// Hash is the hex sha256 of the file the configuration was loaded from.
 	Hash string `yaml:"-"`
@@ -90,6 +92,16 @@ type RPM struct {
 	Releases      []string `yaml:"releases"`
 }
 
+// OCI configures container images (design section 19).
+type OCI struct {
+	// Retention is how many untagged manifests are kept per name, besides
+	// tagged ones, for images pushed to garner; 0 keeps all.
+	Retention int `yaml:"retention"`
+	// UploadExpiry is how long pushed blobs that no manifest references
+	// yet, and idle upload sessions, are kept.
+	UploadExpiry time.Duration `yaml:"upload_expiry"`
+}
+
 // Defaults apply to every source that does not override them.
 type Defaults struct {
 	Retention    int           `yaml:"retention"`
@@ -113,8 +125,25 @@ type Forge struct {
 	Proxy         string `yaml:"proxy"`
 }
 
+// Registry is an OCI registry that registry sources sync images from
+// (design section 19).
+type Registry struct {
+	Name      string `yaml:"name"`
+	URL       string `yaml:"url"`
+	Username  string `yaml:"username"`
+	TokenEnv  string `yaml:"token_env"`
+	TokenFile string `yaml:"token_file"`
+	// AuthHosts are hosts besides the registry's own that may receive its
+	// credentials as token endpoints (Docker Hub's auth.docker.io).
+	AuthHosts     []string `yaml:"auth_hosts"`
+	CAFile        string   `yaml:"ca_file"`
+	MaxConcurrent int      `yaml:"max_concurrent"`
+	Proxy         string   `yaml:"proxy"`
+}
+
 // Source is one sync origin: a single repository (Repo) or a whole
-// organization (Org) or GitLab group (Group).
+// organization (Org) or GitLab group (Group) of a forge, or an image
+// (Image) of a registry.
 type Source struct {
 	Name    string      `yaml:"name"`
 	Forge   string      `yaml:"forge"`
@@ -128,6 +157,13 @@ type Source struct {
 	// Checksums are globs naming a release's checksum files; they replace
 	// the built-in names (checksums.txt, SHA256SUMS, ...).
 	Checksums []string `yaml:"checksums"`
+
+	// Registry sources: the registry, the image path on it, globs of the
+	// tags to sync and the local name (default Image).
+	Registry string   `yaml:"registry"`
+	Image    string   `yaml:"image"`
+	Tags     []string `yaml:"tags"`
+	As       string   `yaml:"as"`
 
 	Archived  bool  `yaml:"archived"`
 	Forks     bool  `yaml:"forks"`
@@ -219,6 +255,7 @@ func Default() *Config {
 		},
 		Deb: defaultDeb(),
 		RPM: defaultRPM(),
+		OCI: defaultOCI(),
 		Defaults: Defaults{
 			Retention:    3,
 			PollInterval: time.Hour,
@@ -236,11 +273,30 @@ func defaultRPM() *RPM {
 	return &RPM{Architectures: []string{"x86_64"}, Releases: []string{"stable"}}
 }
 
+func defaultOCI() *OCI {
+	return &OCI{Retention: 10, UploadExpiry: 24 * time.Hour}
+}
+
+// IsRegistry reports whether the source syncs images from a registry
+// rather than releases from a forge.
+func (s Source) IsRegistry() bool { return s.Registry != "" }
+
+// LocalName is the name a registry source's images are stored under.
+func (s Source) LocalName() string {
+	if s.As != "" {
+		return s.As
+	}
+	return s.Image
+}
+
 // Formats returns the names of the configured format sections, sorted.
 func (c *Config) Formats() []string {
 	var out []string
 	if c.Deb != nil {
 		out = append(out, "deb")
+	}
+	if c.OCI != nil {
+		out = append(out, "oci")
 	}
 	if c.RPM != nil {
 		out = append(out, "rpm")
@@ -284,9 +340,19 @@ func Parse(data []byte) (*Config, error) {
 	} else if cfg.RPM == nil {
 		cfg.RPM = defaultRPM()
 	}
+	if !keys["oci"] {
+		cfg.OCI = nil
+	} else if cfg.OCI == nil {
+		cfg.OCI = defaultOCI()
+	}
 	for i := range cfg.Forges {
 		if cfg.Forges[i].MaxConcurrent == 0 {
 			cfg.Forges[i].MaxConcurrent = defaultMaxConcurrent
+		}
+	}
+	for i := range cfg.Registries {
+		if cfg.Registries[i].MaxConcurrent == 0 {
+			cfg.Registries[i].MaxConcurrent = defaultMaxConcurrent
 		}
 	}
 	sum := sha256.Sum256(data)

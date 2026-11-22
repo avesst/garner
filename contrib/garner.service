@@ -10,7 +10,7 @@
 # rpm support needs createrepo_c, rpm-sign (rpmsign) and gnupg2 on PATH.
 
 [Unit]
-Description=garner package repository
+Description=garner repository for packages and container images
 Documentation=https://github.com/avesst/garner
 Wants=network-online.target
 After=network-online.target

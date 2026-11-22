@@ -23,7 +23,15 @@ var (
 	reDistribution = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	reDebArch      = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 	reRPMArch      = regexp.MustCompile(`^[a-z0-9][a-z0-9_]*$`)
+	// OCI repository names (distribution spec); the oci package applies
+	// the same rule and also refuses reserved components.
+	reImage = regexp.MustCompile(`^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$`)
+	// Hosts in auth_hosts.
+	reHost = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]+)?$`)
 )
+
+// reservedImageComponents may not appear in an image name (section 19).
+var reservedImageComponents = []string{"blobs", "manifests", "tags", "uploads", "referrers"}
 
 // problems collects validation messages, each prefixed with the key path.
 type problems []string
@@ -45,9 +53,17 @@ func (c *Config) Validate() error {
 			p.add(fmt.Sprintf("signing.keys[%d].key_file", i), "is required")
 		}
 	}
-	if c.Deb == nil && c.RPM == nil {
+	if c.Deb == nil && c.RPM == nil && c.OCI == nil {
 		// About the whole file, so no key path.
-		p = append(p, "no package format is configured; add a deb or rpm section")
+		p = append(p, "no package format is configured; add a deb, rpm or oci section")
+	}
+	if c.OCI != nil {
+		if c.OCI.Retention < 0 {
+			p.add("oci.retention", "must not be negative, got %d", c.OCI.Retention)
+		}
+		if c.OCI.UploadExpiry < time.Minute {
+			p.add("oci.upload_expiry", "must be at least 1m, got %s", c.OCI.UploadExpiry)
+		}
 	}
 	if c.Deb != nil {
 		validateList(&p, "deb.architectures", c.Deb.Architectures, reDebArch, "all")
@@ -66,7 +82,8 @@ func (c *Config) Validate() error {
 		PollInterval: c.Defaults.PollInterval, Verify: c.Defaults.Verify,
 		Approval: c.Defaults.Approval, MinReleaseAge: c.Defaults.MinReleaseAge})
 	forges := c.validateForges(&p)
-	c.validateSources(&p, forges)
+	registries := c.validateRegistries(&p)
+	c.validateSources(&p, forges, registries)
 	if len(p) > 0 {
 		return &ValidationError{Problems: p}
 	}
@@ -262,8 +279,49 @@ func (c *Config) validateForges(p *problems) map[string]string {
 	return types
 }
 
-func (c *Config) validateSources(p *problems, forges map[string]string) {
+// validateRegistries checks the registries and returns their names.
+func (c *Config) validateRegistries(p *problems) map[string]bool {
 	names := map[string]bool{}
+	for i, r := range c.Registries {
+		rp := fmt.Sprintf("registries[%d]", i)
+		if !reName.MatchString(r.Name) {
+			p.add(rp+".name", "must match %s, got %q", reName, r.Name)
+		} else if names[r.Name] {
+			p.add(rp+".name", "%q is used by another registry", r.Name)
+		}
+		names[r.Name] = true
+		// Credentials are sent to this URL, so it must use TLS.
+		if u, err := url.Parse(r.URL); err != nil || u.Scheme != "https" || u.Host == "" ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" {
+			p.add(rp+".url", "must be an https URL without a path, got %q", r.URL)
+		}
+		if r.TokenEnv != "" && r.TokenFile != "" {
+			p.add(rp, "set token_env or token_file, not both")
+		}
+		if r.Username != "" && r.TokenEnv == "" && r.TokenFile == "" {
+			p.add(rp+".username", "needs token_env or token_file")
+		}
+		for j, h := range r.AuthHosts {
+			if !reHost.MatchString(h) {
+				p.add(fmt.Sprintf("%s.auth_hosts[%d]", rp, j), "must be a host name, optionally with a port, got %q", h)
+			}
+		}
+		if r.MaxConcurrent < 1 {
+			p.add(rp+".max_concurrent", "must be at least 1, got %d", r.MaxConcurrent)
+		}
+		if r.Proxy != "" {
+			if u, err := url.Parse(r.Proxy); err != nil || u.Host == "" ||
+				!slices.Contains([]string{"http", "https", "socks5"}, u.Scheme) {
+				p.add(rp+".proxy", "must be an http, https or socks5 URL, got %q", r.Proxy)
+			}
+		}
+	}
+	return names
+}
+
+func (c *Config) validateSources(p *problems, forges map[string]string, registries map[string]bool) {
+	names := map[string]bool{}
+	images := map[string]string{} // local image name -> source
 	for i, s := range c.Sources {
 		sp := fmt.Sprintf("sources[%d]", i)
 		if !reName.MatchString(s.Name) {
@@ -273,6 +331,20 @@ func (c *Config) validateSources(p *problems, forges map[string]string) {
 		}
 		names[s.Name] = true
 
+		if s.Registry != "" || s.Forge == "" && (s.Image != "" || len(s.Tags) > 0) {
+			c.validateRegistrySource(p, sp, s, registries)
+			// Two sources delivering one name would hold every image of
+			// the second as an ownership conflict.
+			if other, dup := images[s.LocalName()]; dup && s.LocalName() != "" {
+				p.add(sp, "serves its images as %q, as source %q does; set a different as", s.LocalName(), other)
+			}
+			images[s.LocalName()] = s.Name
+			validateSettings(p, sp, c.Settings(s))
+			continue
+		}
+		if s.Image != "" || len(s.Tags) > 0 || s.As != "" {
+			p.add(sp, "image, tags and as only apply to registry sources")
+		}
 		typ, ok := forges[s.Forge]
 		if !ok {
 			p.add(sp+".forge", "unknown forge %q", s.Forge)
@@ -287,6 +359,49 @@ func (c *Config) validateSources(p *problems, forges map[string]string) {
 		validateSettings(p, sp, c.Settings(s))
 	}
 	c.validateOwnership(p)
+}
+
+// validateRegistrySource checks a source that syncs images from a
+// registry.
+func (c *Config) validateRegistrySource(p *problems, sp string, s Source, registries map[string]bool) {
+	if s.Forge != "" {
+		p.add(sp, "set forge or registry, not both")
+	}
+	if !registries[s.Registry] {
+		p.add(sp+".registry", "unknown registry %q", s.Registry)
+	}
+	if c.OCI == nil {
+		p.add(sp+".registry", "registry sources need the oci section")
+	}
+	if s.Repo != "" || s.Org != "" || s.Group != "" || len(s.Assets) > 0 || len(s.Include) > 0 ||
+		len(s.Exclude) > 0 || len(s.Checksums) > 0 || s.Recursive != nil || s.Archived || s.Forks {
+		p.add(sp, "repo, org, group, assets, include, exclude, checksums, recursive, archived and forks only apply to forge sources")
+	}
+	validateImageName(p, sp+".image", s.Image, true)
+	validateImageName(p, sp+".as", s.As, false)
+	if len(s.Tags) == 0 {
+		p.add(sp+".tags", "must list at least one tag glob")
+	}
+	validateGlobs(p, sp+".tags", s.Tags)
+	validateGlobs(p, sp+".owns", s.Owns)
+}
+
+func validateImageName(p *problems, path, name string, required bool) {
+	if name == "" {
+		if required {
+			p.add(path, "is required")
+		}
+		return
+	}
+	if len(name) > 255 || !reImage.MatchString(name) {
+		p.add(path, "must be an image name such as team/tool, got %q", name)
+		return
+	}
+	for _, c := range strings.Split(name, "/") {
+		if slices.Contains(reservedImageComponents, c) {
+			p.add(path, "%q has the reserved component %q", name, c)
+		}
+	}
 }
 
 func (c *Config) validateSourceTarget(p *problems, sp string, s Source, typ string) {
@@ -356,11 +471,16 @@ func (c *Config) validateAssets(p *problems, sp string, rules []AssetRule) {
 }
 
 // validateOwnership rejects owns: globs of different sources that can match
-// the same package name (design section 8).
+// the same package name (design section 8). Forge and registry sources
+// deliver formats of different namespaces, so only sources of one kind
+// can collide (section 19).
 func (c *Config) validateOwnership(p *problems) {
 	for i := range c.Sources {
 		for j := i + 1; j < len(c.Sources); j++ {
 			a, b := c.Sources[i], c.Sources[j]
+			if a.IsRegistry() != b.IsRegistry() {
+				continue
+			}
 			for _, ga := range a.Owns {
 				for _, gb := range b.Owns {
 					ex, ok, err := glob.Overlap(ga, gb)

@@ -9,13 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path"
 	"slices"
 	"strings"
 
 	"github.com/avesst/garner/internal/blob"
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/format"
+	"github.com/avesst/garner/internal/glob"
 	"github.com/avesst/garner/internal/id"
 	"github.com/avesst/garner/internal/store"
 )
@@ -97,6 +97,9 @@ type Result struct {
 	Existing bool
 	// Conflict explains why a package was stored held.
 	Conflict string
+	// Moved is set by Record when the package or one of its tags is new
+	// to the served set.
+	Moved bool
 }
 
 // SourceOwner is the owner label of a sync source.
@@ -183,7 +186,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 		if req.Held {
 			state = store.Held
 		}
-		ownerConflict, claim, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), parsed.Name, req.Owner)
+		ownerConflict, claim, err := in.checkOwner(ctx, q, cfg, fm, parsed.Name, req.Owner)
 		if err != nil {
 			return err
 		}
@@ -200,7 +203,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 			if name == parsed.Name {
 				continue
 			}
-			c, claim, err := in.checkOwner(ctx, q, cfg, fm.Namespace(), name, req.Owner)
+			c, claim, err := in.checkOwner(ctx, q, cfg, fm, name, req.Owner)
 			if err != nil {
 				return err
 			}
@@ -369,8 +372,9 @@ type ownerClaim struct{ name, source string }
 // the name belongs to someone else, and the claim to record when the name
 // is free or reserved for owner but not yet assigned to it.
 func (in *Ingester) checkOwner(ctx context.Context, q *store.Queries, cfg *config.Config,
-	namespace, name, owner string) (string, *ownerClaim, error) {
-	if reserved := ReservedOwner(cfg, name); reserved != "" {
+	fm format.Format, name, owner string) (string, *ownerClaim, error) {
+	namespace := fm.Namespace()
+	if reserved := ReservedOwner(cfg, fm, name); reserved != "" {
 		if reserved != owner {
 			return fmt.Sprintf("name %q is reserved for %s", name, reserved), nil, nil
 		}
@@ -396,12 +400,19 @@ func (in *Ingester) checkOwner(ctx context.Context, q *store.Queries, cfg *confi
 	return "", nil, nil
 }
 
-// ReservedOwner returns the source owner whose owns: globs match name, or
-// "". Validation guarantees at most one source matches.
-func ReservedOwner(cfg *config.Config, name string) string {
+// ReservedOwner returns the source owner whose owns: globs match name in
+// fm's namespace, or "". A source reserves names only for the formats it
+// delivers: forge sources for package files, registry sources for
+// registry formats (section 19). Validation guarantees at most one source
+// matches.
+func ReservedOwner(cfg *config.Config, fm format.Format, name string) string {
+	_, fromRegistries := fm.(format.RegistryFormat)
 	for _, s := range cfg.Sources {
+		if s.IsRegistry() != fromRegistries {
+			continue
+		}
 		for _, g := range s.Owns {
-			if ok, _ := path.Match(g, name); ok {
+			if glob.Match(g, name) {
 				return SourceOwner(s.Name)
 			}
 		}

@@ -46,6 +46,9 @@ type Manager struct {
 	MaxStartDelay time.Duration
 	// Now is the clock for min_release_age; tests replace it.
 	Now func() time.Time
+	// Images syncs registry sources (section 19); nil when no format
+	// takes images.
+	Images ImageSyncer
 
 	mu       gosync.Mutex
 	base     context.Context // from Start; loops derive from it
@@ -69,6 +72,24 @@ type Manager struct {
 	added       *metrics.Vec
 }
 
+// ImageSyncer syncs a registry source: the tags of one image. The
+// manager runs it on the source's schedule and records its outcome like a
+// forge sync's.
+type ImageSyncer interface {
+	SyncImages(ctx context.Context, src config.Source, cfg *config.Config, log *slog.Logger) (ImageResult, error)
+	// Reset drops cached registry clients, so rotated credentials take
+	// effect; Restart calls it.
+	Reset()
+}
+
+// ImageResult is the outcome of an image sync.
+type ImageResult struct {
+	Added int
+	// Deferred are digests waiting for min_release_age, with Repo the
+	// image.
+	Deferred []server.DeferredRelease
+}
+
 // worker is one source's poll loop and the configuration it started with.
 type worker struct {
 	cancel context.CancelFunc
@@ -82,6 +103,7 @@ type workerKey struct {
 	Source   config.Source
 	Settings config.Settings
 	Forge    config.Forge
+	Registry config.Registry
 }
 
 // RegisterMetrics adds the sync metrics of section 13.
@@ -131,6 +153,9 @@ func (m *Manager) Start(ctx context.Context) error {
 // stays unseen, so the next run retries it.
 func (m *Manager) Restart() error {
 	cfg := m.Config()
+	if m.Images != nil {
+		m.Images.Reset()
+	}
 	newClient := m.NewClient
 	if newClient == nil {
 		newClient = forge.New
@@ -155,9 +180,14 @@ func (m *Manager) Restart() error {
 	if m.workers == nil {
 		m.workers = map[string]*worker{}
 	}
+	registries := map[string]config.Registry{}
+	for _, r := range cfg.Registries {
+		registries[r.Name] = r
+	}
 	want := map[string]workerKey{}
 	for _, src := range cfg.Sources {
-		want[src.Name] = workerKey{Source: src, Settings: cfg.Settings(src), Forge: forges[src.Forge]}
+		want[src.Name] = workerKey{Source: src, Settings: cfg.Settings(src), Forge: forges[src.Forge],
+			Registry: registries[src.Registry]}
 	}
 	for name, w := range m.workers {
 		if k, ok := want[name]; !ok || !reflect.DeepEqual(k, w.key) {
@@ -227,7 +257,11 @@ func (m *Manager) Status(ctx context.Context) []server.SourceStatus {
 		skipped := slices.Clone(m.skipped[s.Name])
 		deferred := slices.Clone(m.deferred[s.Name])
 		m.mu.Unlock()
-		out = append(out, server.SourceStatus{Name: s.Name, LastRun: st.LastRun,
+		kind := server.KindForge
+		if s.IsRegistry() {
+			kind = server.KindRegistry
+		}
+		out = append(out, server.SourceStatus{Name: s.Name, Kind: kind, LastRun: st.LastRun,
 			LastSuccess: st.LastSuccess, LastError: st.LastError, Unmatched: info, Skipped: skipped,
 			Deferred: deferred})
 	}
@@ -380,6 +414,20 @@ type run struct {
 }
 
 func (r *run) sync(ctx context.Context) error {
+	if r.src.IsRegistry() {
+		if r.m.Images == nil {
+			return fmt.Errorf("no format syncs images; add the oci section")
+		}
+		res, err := r.m.Images.SyncImages(ctx, r.src, r.cfg, r.log)
+		r.added = res.Added
+		r.deferred = res.Deferred
+		r.m.mu.Lock()
+		r.m.repoInfo[r.src.Name] = nil
+		r.m.skipped[r.src.Name] = nil
+		r.m.deferred[r.src.Name] = r.deferred
+		r.m.mu.Unlock()
+		return err
+	}
 	if r.client == nil {
 		return fmt.Errorf("unknown forge %q", r.src.Forge)
 	}

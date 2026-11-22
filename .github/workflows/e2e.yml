@@ -1,6 +1,6 @@
 name: e2e
 
-# Real apt and dnf clients in containers, against garner in-process and
+# Real apt, dnf and container clients, against garner in-process and
 # from its container image. Skipped when only documentation, contrib
 # files or scripts change; run it by hand with workflow_dispatch.
 on:

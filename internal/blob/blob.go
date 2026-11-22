@@ -140,6 +140,9 @@ func (s *Store) Path(sha string) (string, error) {
 	return s.path(sha), nil
 }
 
+// PathOf is Path for a sha256 the caller has validated.
+func (s *Store) PathOf(sha string) string { return s.path(sha) }
+
 // Open opens the blob with the given sha256 for reading.
 func (s *Store) Open(sha string) (*os.File, error) {
 	p, err := s.Path(sha)

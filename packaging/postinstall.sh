@@ -15,7 +15,7 @@ if command -v systemd-sysusers >/dev/null 2>&1; then
 	systemd-sysusers garner.conf
 elif ! getent passwd garner >/dev/null; then
 	useradd --system --user-group --home-dir /var/lib/garner --no-create-home \
-		--shell /usr/sbin/nologin --comment "garner package repository" garner
+		--shell /usr/sbin/nologin --comment "garner repository" garner
 fi
 if [ -L /var/lib/garner ] && [ -d /var/lib/private/garner ]; then
 	# Left by a version with DynamicUser=yes: a link to

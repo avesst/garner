@@ -99,10 +99,26 @@ func (p *Publisher) Verify(ctx context.Context) (*VerifyReport, error) {
 		return nil, err
 	}
 	rep.Packages = len(pkgs)
+	owned, err := p.Store.PackageBlobs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	snapTags, err := p.Store.SnapshotTags(ctx, cur.ID)
+	if err != nil {
+		return nil, err
+	}
+	tagsByFormat := map[string][]format.Tag{}
+	for _, t := range snapTags {
+		tagsByFormat[t.Format] = append(tagsByFormat[t.Format], t)
+	}
 	byFormat := map[string][]*format.Package{}
 	for _, pk := range pkgs {
+		pk.Blobs = owned[pk.ID]
 		byFormat[pk.Format] = append(byFormat[pk.Format], pk)
 		p.verifyPool(pk, add)
+		if err := p.verifyOwnedBlobs(ctx, pk, add); err != nil {
+			return nil, err
+		}
 	}
 
 	links := p.fixedLinks(cfg)
@@ -115,6 +131,7 @@ func (p *Publisher) Verify(ctx context.Context) (*VerifyReport, error) {
 		for _, fm := range p.Formats.All() {
 			req := &format.VerifyRequest{
 				Dir: filepath.Join(snapDir, fm.Name()), Packages: byFormat[fm.Name()], Config: cfg, Keys: keys,
+				Tags: tagsByFormat[fm.Name()],
 			}
 			if previous != "" {
 				req.Previous = filepath.Join(p.snapshotsDir(), previous, fm.Name())
@@ -243,6 +260,49 @@ func (p *Publisher) verifyPool(pk *format.Package, add func(format.Problem)) {
 	}
 }
 
+// verifyOwnedBlobs checks the further blobs of a package (section 19):
+// each has a row, a file of the recorded size and its pool file.
+func (p *Publisher) verifyOwnedBlobs(ctx context.Context, pk *format.Package, add func(format.Problem)) error {
+	fm, ok := p.Formats.Get(pk.Format)
+	if !ok || len(pk.Blobs) == 0 {
+		return nil
+	}
+	bp, ok := fm.(format.BlobPooler)
+	desc := fmt.Sprintf("%s %s %s", pk.Format, pk.Name, pk.Version)
+	if !ok {
+		add(format.Errorf("blob", "", "%s: owns %d further blobs, but %s does not pool them", desc, len(pk.Blobs), fm.Name()))
+		return nil
+	}
+	for _, sha := range pk.Blobs {
+		size, err := p.Store.BlobSize(ctx, sha)
+		if errors.Is(err, store.ErrNotFound) {
+			add(format.Errorf("blob", "", "%s: blob %s has no database row", desc, sha))
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		blobPath, err := p.Blobs.Path(sha)
+		if err != nil {
+			add(format.Errorf("blob", "", "%s: %v", desc, err))
+			continue
+		}
+		for _, f := range []struct{ check, path string }{
+			{"blob", blobPath},
+			{"pool", filepath.Join(p.poolDir(fm.Name()), filepath.FromSlash(bp.BlobPoolPath(sha)))},
+		} {
+			fi, err := os.Stat(f.path)
+			switch {
+			case err != nil:
+				add(format.Errorf(f.check, f.path, "%s: %v", desc, err))
+			case fi.Size() != size:
+				add(format.Errorf(f.check, f.path, "%s: has %d bytes, recorded %d", desc, fi.Size(), size))
+			}
+		}
+	}
+	return nil
+}
+
 // verifyLinks checks public/'s fixed links. A link no longer configured is
 // a warning: the next publish removes it.
 func (p *Publisher) verifyLinks(want map[string]string, add func(format.Problem)) {
@@ -287,10 +347,6 @@ func (p *Publisher) verifyGarbage(ctx context.Context, grace time.Duration, add 
 	if err != nil {
 		return err
 	}
-	prefixes := map[string]bool{}
-	for sha := range live {
-		prefixes[sha[:min(16, len(sha))]] = true
-	}
 	old := func(d fs.DirEntry) bool {
 		info, err := d.Info()
 		return err == nil && time.Since(info.ModTime()) > grace
@@ -307,8 +363,9 @@ func (p *Publisher) verifyGarbage(ctx context.Context, grace time.Duration, add 
 	}
 	for _, fm := range p.Formats.All() {
 		root := p.poolDir(fm.Name())
+		garbage := poolGarbage(fm, root, live)
 		if n := count(root, func(path string, d fs.DirEntry) bool {
-			return !prefixes[filepath.Base(filepath.Dir(path))]
+			return garbage(path)
 		}); n > 0 {
 			add(format.Warnf("garbage", root, "%d pool files no snapshot or package references; GC removes them", n))
 		}

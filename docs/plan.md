@@ -174,6 +174,75 @@ pulled first.
   and is not shared between nodes. Fix with the multi-node work: a `tag`
   column in `pending_releases`, and the decision made from the database.
 
+## OCI images (after 0.1.0)
+
+Designed in design section 19 and built in `internal/oci`.
+
+| # | Slice | Done when | Status |
+|---|---|---|---|
+| O1 | Core: `package_blobs`, `tags`, `snapshot_tags`, `staged_blobs`, multi-blob pool links and GC, `Record` ingest; one glob matcher for `owns`, reservations by source kind | Existing tests pass; GC keeps blobs shared by packages and staged blobs until they expire; a rollback restores tags | Done (unit tests in `internal/oci`, `internal/glob`, `internal/ingest`) |
+| O2 | Pull: render manifests, tag lists and blob links per snapshot; `/v2/` in the built-in server; `oci:` config section | docker, podman, skopeo and crane pull by tag and digest, single- and multi-arch; `garner verify` checks the tree | Done (`TestOCIClients`) |
+| O3 | Push: upload sessions, manifests, token auth on `/v2/`, ownership, `DELETE` | `docker push` and a multi-arch `docker buildx imagetools create` work and can be pulled after publish; `docker login` rejects a bad token; anonymous pulls work; another owner's push is refused | Done (`TestOCIClients`, `TestOCIPushRefusedForOtherOwner`, unit tests for chunks, resume and digests) |
+| O4 | Registry sync: local client, `registries:`, image sources, tag globs, `min_release_age` from first sight | Unit tests against a fake registry with Bearer auth on another host and a CDN redirect that must not get credentials | Done; also against ghcr.io, Docker Hub and registry.gitlab.com (below) |
+| O5 | Landing page, `garner.1`, `garner.yaml.5`, `docs/configuration.md`, `contrib/garner.yaml`, README proxy examples | `just check` and `just e2e` pass | Done |
+
+Settled while building:
+
+- `GET /v2/` answers `401` with a `Bearer` challenge and `/v2/token`
+  hands out anonymous tokens. It first answered with a `Basic`
+  challenge, which Docker's classic image store (the CI runners') turns
+  into `no basic auth credentials` on anonymous pulls; Docker 29 with the
+  containerd store pulled anyway, which is why local runs passed.
+  `TestOCIClients` passes against Docker 29.10 with the classic store in
+  dind.
+- The reverse proxy forwards all of `/v2/` to garner. The snapshot tree
+  could be served statically, but no proxy recipe for it is shipped or
+  tested.
+- `/v2/` serves only published image blobs, plus `HEAD` on blobs a push
+  staged; held packages' blobs are not reachable.
+
+On 2026-11-22 a build of the OCI work was installed from its `.deb` on
+the test host (Debian 13, systemd, behind Caddy with TLS) over the
+corpus of 536 packages:
+
+- Registry sources synced anonymously from ghcr.io
+  (`containerd/busybox`), Docker Hub (`library/alpine`, with
+  `auth_hosts: [auth.docker.io]`) and registry.gitlab.com
+  (`gitlab-org/release-cli`, with `auth_hosts: [gitlab.com]`) on their
+  first poll; docker on another host pulled and ran them.
+- Through Caddy: `docker login` refused a bad token; `docker push` and
+  `docker buildx imagetools create` (a multi-arch index, its blobs mounted
+  from another name) worked; a push to a source-owned name was refused;
+  anonymous pulls, an arm64 pull and the tag list worked; the landing
+  page listed the images.
+- Tag `DELETE` (admin only), `garner remove` of an image name with `/`,
+  publish, GC and `garner verify` (no problems, 550 packages), and apt on
+  the host, all after the upgrade.
+
+Not verified yet:
+
+- Static serving of the `/v2/` tree by a proxy.
+- Registry sync with credentials (all three tests were anonymous) and
+  `min_release_age` on a real registry.
+- The OCI 1.1 referrers API is not implemented; cosign's tag scheme works
+  as ordinary tags but has not been tried with cosign.
+- Not tried: `docker push` through nginx.
+- Single-node limits, for the multi-node work (design section 18): a
+  registry's `max_concurrent` is an in-process limit, and the client
+  cache is guarded by a Go mutex.
+
+## Landing page by ecosystem (after 0.1.0)
+
+Done; design section 14. One tab per ecosystem (formats grouped by
+namespace) with a summary, then every package or image of the tab,
+paged 25 at a time with a filter. Separate `packages.html` and
+`images.html` pages were tried first and dropped for the in-tab lists.
+`TestLandingByEcosystem` renders deb, rpm and images and checks each
+list stays in its tab; `TestLandingManyImages` lists 501 images in the
+page. Paging and filtering were checked in headless Chromium (25 of 501
+rows shown); not checked with screen readers. `index.html` grows with
+the number of names, about 150 KB for 500 images.
+
 ## Decisions to make when their slice arrives
 
 | Decision | Needed by | Current recommendation |

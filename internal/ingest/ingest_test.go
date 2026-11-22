@@ -334,3 +334,31 @@ func TestDefaultDistribution(t *testing.T) {
 		}
 	}
 }
+
+// registryFormat stands in for a format registry sources deliver.
+type registryFormat struct{ deb.Format }
+
+func (registryFormat) FromRegistries() {}
+
+func TestReservationsFollowSourceKind(t *testing.T) {
+	cfg := config.Default()
+	cfg.Sources = []config.Source{
+		{Name: "tool", Forge: "gh", Owns: []string{"tool"}},
+		{Name: "image", Registry: "r", Image: "a/tool", Owns: []string{"team/*"}},
+	}
+	tests := []struct {
+		fm   format.Format
+		name string
+		want string
+	}{
+		{deb.Format{}, "tool", "source:tool"},
+		{registryFormat{}, "tool", ""},
+		{registryFormat{}, "team/tools/cli", "source:image"},
+		{deb.Format{}, "team/x", ""},
+	}
+	for _, tt := range tests {
+		if got := ReservedOwner(cfg, tt.fm, tt.name); got != tt.want {
+			t.Errorf("ReservedOwner(%T, %q) = %q, want %q", tt.fm, tt.name, got, tt.want)
+		}
+	}
+}
