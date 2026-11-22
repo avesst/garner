@@ -242,13 +242,17 @@ limit; publishes are debounced (section 3), which makes it rare.
 
 ### Supported clients
 
-garner is tested against the current stable release of each client
+garner is tested against every supported release of each client
 distribution: Debian, Ubuntu LTS, RHEL and its rebuilds (AlmaLinux, Rocky),
-and Fedora. As of 2026-11 that is Debian 13, Ubuntu 26.04 LTS and EL 10.
-Older releases may work but are not tested in the MVP; testing the previous
-release too (Ubuntu 24.04 LTS, EL 9) is planned for later. All of these verify signatures
-with Sequoia-based tooling and reject SHA-1; garner signs with RSA 4096 and
-SHA-256 or stronger.
+and Fedora. As of 2026-11 that is Debian 12 and 13, Ubuntu 22.04, 24.04 and
+26.04 LTS, EL 9 (AlmaLinux) and EL 10 (AlmaLinux and Rocky Linux), and
+Fedora 44.
+
+They check signatures with different tools: apt with Sequoia's `sqv` on
+Debian 13 and with GnuPG's `gpgv` on Debian 12 and Ubuntu; rpm with
+`rpm-sequoia` on EL 10 and Fedora, and without it on EL 9. garner signs
+with RSA 4096 and SHA-256 or stronger, which all of them accept; the
+Sequoia-based ones reject SHA-1.
 
 ## 5. Configuration
 

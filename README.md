@@ -149,9 +149,10 @@ under `/snapshots/<id>/`.
 Install the package, configure and start the service, and put it behind a
 reverse proxy. Optionally, let garner keep itself up to date.
 
-garner runs on Linux amd64 with systemd. The packages, and apt and dnf as
-clients, are tested on Debian 13, Ubuntu 26.04 LTS, AlmaLinux 10 and
-Fedora 44.
+garner runs on Linux amd64 with systemd. Its packages are tested on
+Debian 13, Ubuntu 26.04 LTS, AlmaLinux 10 and Fedora 44. apt and dnf as
+clients are tested on Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04 LTS,
+AlmaLinux 9 and 10, Rocky Linux 10 and Fedora 44.
 
 ### Install the package
 

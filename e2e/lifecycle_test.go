@@ -160,7 +160,7 @@ func TestDnfLifecycle(t *testing.T) {
 		e.api(http.MethodPut, "/api/v1/upload?release=stable", data)
 	}
 	verify := func() { checkVerify(t, e.url, "admin", e.token) }
-	images := []string{"almalinux:10", "fedora:44"}
+	images := dnfImages
 	clients := map[string]*client{}
 	for _, image := range images {
 		clients[image] = startClient(t, image)

@@ -27,7 +27,13 @@ apt_fetch %[1]s/garner.sources /etc/apt/sources.list.d/garner.sources
 `, url)
 }
 
-var aptImages = []string{"debian:trixie", "ubuntu:26.04"}
+// aptImages are the apt clients the tests run: every supported Debian and
+// Ubuntu LTS release, oldest first (design section 4).
+var aptImages = []string{"debian:bookworm", "debian:trixie", "ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"}
+
+// dnfImages are the dnf clients: EL 9 (dnf 4) and 10 from two rebuilds, and
+// Fedora (dnf 5).
+var dnfImages = []string{"almalinux:9", "almalinux:10", "rockylinux/rockylinux:10", "fedora:44"}
 
 func TestAptInstall(t *testing.T) {
 	e := newEnv(t, "")

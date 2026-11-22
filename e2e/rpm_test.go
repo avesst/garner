@@ -240,7 +240,7 @@ func TestDnfMultilib(t *testing.T) {
 	if code := e.status("/rpm/stable/i686/repodata/repomd.xml"); code != http.StatusNotFound {
 		t.Errorf("an i686 repository is served: HTTP %d", code)
 	}
-	for _, image := range []string{"almalinux:10", "fedora:44"} {
+	for _, image := range dnfImages {
 		t.Run(image, func(t *testing.T) {
 			script := fmt.Sprintf(`
 rm -f /etc/yum.repos.d/*.repo

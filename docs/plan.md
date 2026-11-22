@@ -25,7 +25,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | 2 | Configuration: load, validate, `config validate`, reload on `SIGHUP` (section 5) | Table tests cover valid and invalid files; an invalid reload keeps the old config | Done; `SIGHUP` wiring waits for `serve` (slice 6) |
 | 3 | Database: SQLite, goose migrations, `flock` guard (sections 6, 12) | Migrations apply on SQLite; CI also applies them to PostgreSQL; a second process refuses to start | Done |
 | 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | Done; dpkg's vectors checked once, not committed (GPL), tests compare with `dpkg` instead |
-| 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | Done; `gpgv` in unit tests, `sqv` through apt on Debian 13 and Ubuntu 26.04 |
+| 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | Done; `gpgv` in unit tests, `sqv` through apt on Debian 13 (Ubuntu 26.04's apt uses GnuPG's `gpgv`) |
 | 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, landing page, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | Done (`just e2e`); without index history the race test fails with 404 |
 | 7 | Snapshot list, rollback, GC (section 9) | A rollback is a new snapshot; GC removes only unreferenced blobs and respects `gc_grace` | Done |
 | 8 | rpm: `createrepo_c`, re-signing with `rpmsign`, repodata history (sections 4, 9, 10) | `dnf install` works in `almalinux:10` and `fedora` containers with `gpgcheck` and `repo_gpgcheck` on | Done (`just e2e`, garner from its container image); dnf refuses a bad `repomd.xml.asc`; key rotation by restart re-signs the rpms |
@@ -90,8 +90,10 @@ Done: `TestAptLifecycle` (Debian 13, Ubuntu 26.04) and `TestDnfLifecycle`
 repository's life, with garner verify after each step. apt: install,
 upgrade, an older version on purpose, removal, rollback, a second suite,
 i386 multiarch, and a GC that deletes blobs and pool files. dnf: install,
-upgrade, removal, rollback. Not covered yet: older clients (step 4 of the
-hardening list) and crash and concurrency tests.
+upgrade, removal, rollback. Since 2026-11-22 the e2e client tests run on
+every supported release: Debian 12 and 13, Ubuntu 22.04, 24.04 and 26.04,
+AlmaLinux 9 and 10, Rocky Linux 10 and Fedora 44. Not covered yet: crash
+and concurrency tests.
 
 ## Minimum release age for sync (after 0.1.0)
 

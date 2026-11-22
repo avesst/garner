@@ -175,7 +175,7 @@ func TestDnfInstall(t *testing.T) {
 	}
 	e.api(http.MethodPost, "/api/v1/publish", nil)
 
-	for _, image := range []string{"almalinux:10", "fedora:44"} {
+	for _, image := range dnfImages {
 		t.Run(image, func(t *testing.T) {
 			script := fmt.Sprintf(`
 rm -f /etc/yum.repos.d/*.repo
