@@ -55,6 +55,10 @@ func TestVersionString(t *testing.T) {
 	if got := mustParse(t, "0:1-2").String(); got != "1-2" {
 		t.Errorf("zero epoch: String() = %q, want %q", got, "1-2")
 	}
+	// Without the epoch, the colon would read as the epoch separator.
+	if got := mustParse(t, "0:1:2").String(); got != "0:1:2" {
+		t.Errorf("zero epoch, colon in upstream: String() = %q, want %q", got, "0:1:2")
+	}
 }
 
 // compareTests are written for garner; they cover each rule of dpkg's

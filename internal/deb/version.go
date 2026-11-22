@@ -69,11 +69,12 @@ func ParseVersion(s string) (Version, error) {
 	return v, nil
 }
 
-// String formats v the way dpkg prints it: the epoch only when non-zero,
-// the revision only when present.
+// String formats v the way dpkg prints it: the epoch only when non-zero
+// or when the upstream version holds a colon, which would otherwise read
+// as the epoch separator; the revision only when present.
 func (v Version) String() string {
 	var b strings.Builder
-	if v.Epoch != 0 {
+	if v.Epoch != 0 || strings.Contains(v.Upstream, ":") {
 		b.WriteString(strconv.FormatUint(uint64(v.Epoch), 10))
 		b.WriteByte(':')
 	}
