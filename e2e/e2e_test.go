@@ -8,6 +8,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -19,12 +20,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/avesst/garner/internal/app"
 	"github.com/avesst/garner/internal/auth"
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
+	"github.com/avesst/garner/internal/publish"
 	"github.com/avesst/garner/internal/signing"
 )
 
@@ -113,7 +116,59 @@ deb:
 	})}}
 	e.srv.Start()
 	t.Cleanup(e.srv.Close)
+	verifyAfter(t, url, "ci", secret)
 	return e
+}
+
+// verifyAfter runs garner verify through the API when the test ends, before
+// the server stops, so every scenario also checks the whole published tree.
+// Errors fail the test; warnings are logged. It skips when garner is not
+// running, as in tests where it must refuse to start.
+func verifyAfter(t *testing.T, url, user, secret string) {
+	t.Cleanup(func() {
+		if resp, err := http.Get(url + "/readyz"); err != nil {
+			t.Logf("verify skipped: garner is not running: %v", err)
+			return
+		} else if resp.Body.Close(); resp.StatusCode != http.StatusOK {
+			t.Logf("verify skipped: garner is not ready (HTTP %d)", resp.StatusCode)
+			return
+		}
+		// ready=1 waits out a publish the scheduler has not run yet.
+		var body []byte
+		for i := 0; ; i++ {
+			req, _ := http.NewRequest(http.MethodPost, url+"/api/v1/verify?ready=1", nil)
+			req.SetBasicAuth(user, secret)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Errorf("verify: %v", err)
+				return
+			}
+			body, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusConflict && i < 150 {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("verify: HTTP %d: %s", resp.StatusCode, body)
+				return
+			}
+			break
+		}
+		var rep publish.VerifyReport
+		if err := json.Unmarshal(body, &rep); err != nil {
+			t.Errorf("verify: %v: %s", err, body)
+			return
+		}
+		for _, p := range rep.Problems {
+			if p.Severity == format.SeverityError {
+				t.Errorf("verify: %s %s: %s", p.Check, p.Path, p.Message)
+			} else {
+				t.Logf("verify warning: %s %s: %s", p.Check, p.Path, p.Message)
+			}
+		}
+		t.Logf("verify: snapshot %s, %d packages, %d errors, %d warnings", rep.Snapshot, rep.Packages, rep.Errors, rep.Warnings)
+	})
 }
 
 // hook runs fn once, after the response for a path ending in suffix has

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+
+	"github.com/avesst/garner/internal/publish"
 )
 
 // imageTag is the garner image built from the repository's Dockerfile.
@@ -76,6 +79,7 @@ func newContainerEnv(t *testing.T) *containerEnv {
 		exec.Command("docker", "rm", "-f", e.name).Run()
 	})
 	e.start()
+	verifyAfter(t, e.url, "admin", e.token)
 	return e
 }
 
@@ -208,9 +212,27 @@ rpm -q --qf '%%{SIGPGP:pgpsig}%%{RSAHEADER:pgpsig}\n' garner-hello
 			t.Fatal(err)
 		}
 		asc := filepath.Join(snap, "rpm", "stable", "x86_64", "repodata", "repomd.xml.asc")
+		good, err := os.ReadFile(asc)
+		if err != nil {
+			t.Fatal(err)
+		}
 		os.Chmod(asc, 0o644)
 		if err := os.WriteFile(asc, sig, 0o644); err != nil {
 			t.Fatal(err)
+		}
+		// Restored afterwards, so the check when the test ends passes.
+		defer os.WriteFile(asc, good, 0o644)
+
+		var rep publish.VerifyReport
+		if err := json.Unmarshal(e.api(http.MethodPost, "/api/v1/verify", nil), &rep); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, p := range rep.Problems {
+			found = found || p.Check == "signature" && strings.HasSuffix(p.Path, "repomd.xml.asc")
+		}
+		if !found {
+			t.Errorf("verify did not report the bad signature: %+v", rep.Problems)
 		}
 		out, err := exec.Command("docker", "run", "--rm", "--network", "host", "almalinux:10", "sh", "-ec", fmt.Sprintf(`
 rm -f /etc/yum.repos.d/*.repo
