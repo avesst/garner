@@ -27,8 +27,8 @@ import (
 	"github.com/avesst/garner/internal/store"
 )
 
-// landing is a repository with the given formats, for landing page tests.
-type landing struct {
+// ui is a repository with the given formats, for UI tests.
+type ui struct {
 	t    *testing.T
 	root string
 	cfg  *config.Config
@@ -36,7 +36,7 @@ type landing struct {
 	pub  *publish.Publisher
 }
 
-func newLanding(t *testing.T, cfg *config.Config, fms func(signer func() signing.Signer) []format.Format) *landing {
+func newUI(t *testing.T, cfg *config.Config, fms func(signer func() signing.Signer) []format.Format) *ui {
 	t.Helper()
 	root := t.TempDir()
 	d, err := db.Open(context.Background(), filepath.Join(root, "garner.db"))
@@ -67,13 +67,13 @@ func newLanding(t *testing.T, cfg *config.Config, fms func(signer func() signing
 	conf := func() *config.Config { return cfg }
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := store.New(d.DB)
-	l := &landing{t: t, root: root, cfg: cfg}
+	l := &ui{t: t, root: root, cfg: cfg}
 	l.in = &ingest.Ingester{Store: st, Blobs: blobs, Formats: reg, Config: conf, TmpDir: root, Log: log}
 	l.pub = &publish.Publisher{Store: st, Blobs: blobs, Formats: reg, Config: conf, Signer: signer, Root: root, Log: log}
 	return l
 }
 
-func (l *landing) upload(data []byte) {
+func (l *ui) upload(data []byte) {
 	l.t.Helper()
 	if _, err := l.in.Ingest(context.Background(), bytes.NewReader(data),
 		ingest.Request{Owner: "team", Origin: "upload", OriginRef: "t", VerifyStatus: "n/a"}); err != nil {
@@ -83,7 +83,7 @@ func (l *landing) upload(data []byte) {
 
 // image records an image with the given platforms and tags, as a push
 // would.
-func (l *landing) image(name string, platforms []string, tags ...string) {
+func (l *ui) image(name string, platforms []string, tags ...string) {
 	l.t.Helper()
 	ctx := context.Background()
 	cfgBlob := []byte(`{"architecture":"amd64","os":"linux","name":"` + name + `"}`)
@@ -106,14 +106,14 @@ func (l *landing) image(name string, platforms []string, tags ...string) {
 	}
 }
 
-func (l *landing) publish() {
+func (l *ui) publish() {
 	l.t.Helper()
 	if _, err := l.pub.Publish(context.Background()); err != nil {
 		l.t.Fatal(err)
 	}
 }
 
-func (l *landing) read(name string) string {
+func (l *ui) read(name string) string {
 	l.t.Helper()
 	b, err := os.ReadFile(filepath.Join(l.root, "public", name))
 	if err != nil {
@@ -122,11 +122,11 @@ func (l *landing) read(name string) string {
 	return string(b)
 }
 
-// TestLandingByEcosystem renders deb, rpm and images: one tab per
+// TestUIByEcosystem renders deb, rpm and images: one tab per
 // namespace, the key only with the signed one, and a detail page each.
-// With GARNER_LANDING_SAMPLE set to a directory, the pages are copied
+// With GARNER_UI_SAMPLE set to a directory, the pages are copied
 // there for a look.
-func TestLandingByEcosystem(t *testing.T) {
+func TestUIByEcosystem(t *testing.T) {
 	for _, tool := range []string{"createrepo_c", "rpmsign", "gpg", "gpgconf"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not installed", tool)
@@ -134,7 +134,7 @@ func TestLandingByEcosystem(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.Deb.Suites = []string{"stable", "testing"}
-	l := newLanding(t, cfg, func(signer func() signing.Signer) []format.Format {
+	l := newUI(t, cfg, func(signer func() signing.Signer) []format.Format {
 		r, err := rpm.NewFormat(signer)
 		if err != nil {
 			t.Fatal(err)
@@ -215,7 +215,7 @@ func TestLandingByEcosystem(t *testing.T) {
 		}
 	}
 
-	if dir := getenv("GARNER_LANDING_SAMPLE"); dir != "" {
+	if dir := getenv("GARNER_UI_SAMPLE"); dir != "" {
 		for _, name := range []string{"index.html"} {
 			if err := writeFile(filepath.Join(dir, name), l.read(name)); err != nil {
 				t.Fatal(err)
@@ -226,10 +226,10 @@ func TestLandingByEcosystem(t *testing.T) {
 
 // With 500 images, the summary stays short and the tab's list holds them
 // all; the page's script shows them a page at a time.
-func TestLandingManyImages(t *testing.T) {
+func TestUIManyImages(t *testing.T) {
 	cfg := config.Default()
 	cfg.Deb, cfg.RPM = nil, nil
-	l := newLanding(t, cfg, func(func() signing.Signer) []format.Format { return []format.Format{oci.Format{}} })
+	l := newUI(t, cfg, func(func() signing.Signer) []format.Format { return []format.Format{oci.Format{}} })
 	for i := range 500 {
 		l.image(fmt.Sprintf("ns%02d/image%03d", i%30, i), []string{"linux/amd64"}, "1.0")
 	}
@@ -248,7 +248,7 @@ func TestLandingManyImages(t *testing.T) {
 	if !strings.Contains(page, `href="https://repo.test/v2/ns00/many/tags/list">+3 more</a>`) {
 		t.Error("the list does not cap the tags of ns00/many at 5 with a link to the rest")
 	}
-	if dir := getenv("GARNER_LANDING_SAMPLE"); dir != "" {
+	if dir := getenv("GARNER_UI_SAMPLE"); dir != "" {
 		if err := writeFile(filepath.Join(dir, "index-many.html"), page); err != nil {
 			t.Fatal(err)
 		}

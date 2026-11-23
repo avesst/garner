@@ -343,7 +343,7 @@ func xzBytes(data []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// Presentation puts deb under Linux packages on the landing page.
+// Presentation puts deb under Linux packages in the UI.
 func (Format) Presentation() format.Presentation {
 	return format.Presentation{Ecosystem: "Linux packages", Label: "Debian / Ubuntu", Tool: "apt", Signed: true}
 }

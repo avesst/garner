@@ -35,7 +35,7 @@ type Syncer interface {
 	IgnoreAge(ctx context.Context, source, repo, tag, by string) error
 }
 
-// Kinds of sync source in SourceStatus. The landing page lists each
+// Kinds of sync source in SourceStatus. The UI lists each
 // under the ecosystem it delivers (section 14).
 const (
 	KindForge    = "forge"

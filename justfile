@@ -33,9 +33,9 @@ test:
 e2e:
     go test -tags e2e -count=1 -v ./e2e
 
-# Edits to internal/publish/landing.html reload the page. Flags go to the
+# Edits to internal/publish/ui.html reload the page. Flags go to the
 # preview, such as `just preview -sources 12 -failing 3 -down`.
-# Serve the landing page with demo packages on localhost:8090.
+# Serve the UI with demo packages on localhost:8090.
 preview *args:
     go run ./cmd/garner-preview {{args}}
 

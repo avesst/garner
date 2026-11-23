@@ -56,7 +56,7 @@ type gridCell struct {
 	Alpha string
 }
 
-// ecosystem is one tab of the landing page: the enabled formats of one
+// ecosystem is one tab of the UI: the enabled formats of one
 // namespace (section 14).
 type ecosystem struct {
 	// ID is the namespace.
@@ -109,7 +109,7 @@ func presentation(fm format.Format) format.Presentation {
 	return format.Presentation{Label: fm.Name()}
 }
 
-// ecoTab is an ecosystem's tab on the landing page.
+// ecoTab is an ecosystem's tab in the UI.
 type ecoTab struct {
 	*ecosystem
 	Clients   []clientSection
@@ -121,7 +121,7 @@ type ecoTab struct {
 	Rows []format.Row
 }
 
-type landingData struct {
+type uiData struct {
 	Name         string
 	URL          string
 	Fingerprint  []string // in groups of four, as gpg prints it
@@ -132,7 +132,7 @@ type landingData struct {
 	ConfigCommit string
 }
 
-// writeRootFiles writes the landing page, the keyring
+// writeRootFiles writes the UI, the keyring
 // and the client files into the snapshot, so they change with it
 // (section 4).
 func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signing.Signer,
@@ -147,7 +147,7 @@ func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signin
 	if err := fsutil.WriteFile(filepath.Join(dir, "key.gpg"), binary, 0o644); err != nil {
 		return err
 	}
-	data := landingData{
+	data := uiData{
 		Name:        cfg.Server.ClientName,
 		URL:         publicURL(cfg),
 		Fingerprint: groups(signer.Fingerprint(), 4),
@@ -200,7 +200,7 @@ func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signin
 		tab.Rows = sortRows(rows)
 		data.Tabs = append(data.Tabs, tab)
 	}
-	tmpl, err := p.landing()
+	tmpl, err := p.ui()
 	if err != nil {
 		return err
 	}
@@ -376,20 +376,20 @@ func grids(fms []format.Format, cfg *config.Config, pkgs []*format.Package) ([]c
 	return out, total
 }
 
-//go:embed landing.html
-var landingFS embed.FS
+//go:embed ui.html
+var uiFS embed.FS
 
-var landingTemplate = template.Must(parseLanding(landingFS))
+var uiTemplate = template.Must(parseUI(uiFS))
 
-func parseLanding(fsys fs.FS) (*template.Template, error) {
-	return template.New("landing.html").Funcs(template.FuncMap{"lower": strings.ToLower}).ParseFS(fsys, "landing.html")
+func parseUI(fsys fs.FS) (*template.Template, error) {
+	return template.New("ui.html").Funcs(template.FuncMap{"lower": strings.ToLower}).ParseFS(fsys, "ui.html")
 }
 
-// landing returns the page template: the embedded one, or with LandingFS
+// ui returns the page template: the embedded one, or with UIFS
 // set, one parsed from it now, so a preview shows edits without a rebuild.
-func (p *Publisher) landing() (*template.Template, error) {
-	if p.LandingFS == nil {
-		return landingTemplate, nil
+func (p *Publisher) ui() (*template.Template, error) {
+	if p.UIFS == nil {
+		return uiTemplate, nil
 	}
-	return parseLanding(p.LandingFS)
+	return parseUI(p.UIFS)
 }

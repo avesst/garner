@@ -807,7 +807,7 @@ func TestPendingReleaseRetriedWhenListingUnchanged(t *testing.T) {
 	}
 }
 
-// The status tells forge and registry sources apart, so the landing page
+// The status tells forge and registry sources apart, so the UI
 // lists each under its ecosystem.
 func TestStatusKind(t *testing.T) {
 	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})

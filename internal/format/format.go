@@ -117,7 +117,7 @@ type ClientFile struct {
 	// Distribution is the suite or release the file points at.
 	Distribution string
 	Content      []byte
-	// Instructions are shell commands for the landing page.
+	// Instructions are shell commands for the UI.
 	Instructions string
 }
 
@@ -201,14 +201,14 @@ type BlobPooler interface {
 	BlobPoolPath(sha string) string
 }
 
-// Presenter describes a format on the landing page (section 14). The page
+// Presenter describes a format in the UI (section 14). The page
 // has one tab per ecosystem: the formats that share a Namespace, such as
 // deb and rpm. A format without it is shown under its own name.
 type Presenter interface {
 	Presentation() Presentation
 }
 
-// Presentation is how the landing page shows a format.
+// Presentation is how the UI shows a format.
 type Presentation struct {
 	// Ecosystem names the tab of the format's namespace ("Linux
 	// packages"); formats of one namespace give the same one.

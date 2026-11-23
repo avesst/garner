@@ -279,7 +279,7 @@ func TestPushPublishPull(t *testing.T) {
 	page, _ := os.ReadFile(filepath.Join(f.root, "public/index.html"))
 	if !strings.Contains(string(page), "<strong>1</strong>images") || strings.Contains(string(page), `class="install"`) ||
 		!strings.Contains(string(page), "docker pull repo.test/team/tool:v1") {
-		t.Errorf("landing page does not summarize and list the image as expected")
+		t.Errorf("UI does not summarize and list the image as expected")
 	}
 	f.verify()
 }

@@ -6,8 +6,8 @@ forges and registries, by your own projects and the ones you depend on.
 
 **Repositories that are easy to set up.** garner is one static binary, using
 SQLite and local disk, configured by one YAML file that fits a GitOps
-workflow. `garner init` creates the database and a signing key. The landing
-page offers the public key and ready-made apt and dnf client files, so adding
+workflow. `garner init` creates the database and a signing key. The UI offers
+the public key and ready-made apt and dnf client files, so adding
 the repository to a machine is a matter of downloading them.
 
 **Builds synced from where they are released.** garner watches GitHub, GitHub
@@ -263,7 +263,7 @@ sudo systemctl enable --now garner
 and an admin token. The token is printed once.
 
 Client setup instructions for apt and dnf, and for pulling and pushing
-images, are on the landing page at `public_url`, with a tab per ecosystem
+images, are in the UI at `public_url`, with a tab per ecosystem
 that also lists every package or image, filterable and a page at a time.
 
 ### Put it behind a reverse proxy
@@ -372,7 +372,7 @@ sources:
 ```
 
 Then reload with `sudo systemctl reload garner`, and add the repository on
-the garner host itself as the landing page describes. From then on, new
+the garner host itself as the UI describes. From then on, new
 garner releases arrive with the host's regular package updates.
 
 If a release breaks garner, the host can't fetch the fix from its own

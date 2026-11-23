@@ -14,8 +14,8 @@ each piece is done. Update it as slices land.
   migrations on PostgreSQL; `e2e.yml` runs `just e2e`, except for pushes
   that change only documentation, `contrib/` or `scripts/`.
 - Integration tests run real clients in containers (Docker locally and in CI).
-- `just preview` (`cmd/garner-preview`) serves the landing page with demo
-  packages and a made-up status, and reloads it when `landing.html` changes.
+- `just preview` (`cmd/garner-preview`) serves the UI with demo
+  packages and a made-up status, and reloads it when `ui.html` changes.
   It is a development tool; releases build only `cmd/garner`.
 
 ## MVP step 1, as slices
@@ -29,7 +29,7 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
 | 3 | Database: SQLite, goose migrations, `flock` guard (sections 6, 12) | Migrations apply on SQLite; CI also applies them to PostgreSQL; a second process refuses to start | Done |
 | 4 | Blob store, deb parsing, dpkg version comparison (sections 6, 7) | dpkg's own version test vectors pass; storing the same file twice is a no-op | Done; dpkg's vectors checked once, not committed (GPL), tests compare with `dpkg` instead |
 | 5 | Signing: `init` generates a key; clearsign `InRelease` (section 10) | `sqv` and `gpgv` verify the output | Done; `gpgv` in unit tests, `sqv` through apt on Debian 13 (Ubuntu 26.04's apt uses GnuPG's `gpgv`) |
-| 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, landing page, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | Done (`just e2e`); without index history the race test fails with 404 |
+| 6 | Publish deb: `Packages`, `Release`, hashed pool, by-hash with history, snapshot, `current` swap, UI, client files, built-in server (sections 4, 9, 14) | `apt update && apt install` works in `debian:13` and `ubuntu:26.04` containers; an `apt update` with a publish forced between `InRelease` and `Packages` succeeds | Done (`just e2e`); without index history the race test fails with 404 |
 | 7 | Snapshot list, rollback, GC (section 9) | A rollback is a new snapshot; GC removes only unreferenced blobs and respects `gc_grace` | Done |
 | 8 | rpm: `createrepo_c`, re-signing with `rpmsign`, repodata history (sections 4, 9, 10) | `dnf install` works in `almalinux:10` and `fedora` containers with `gpgcheck` and `repo_gpgcheck` on | Done (`just e2e`, garner from its container image); dnf refuses a bad `repomd.xml.asc`; key rotation by restart re-signs the rpms |
 
@@ -187,7 +187,7 @@ Designed in design section 19 and built in `internal/oci`.
 | O2 | Pull: render manifests, tag lists and blob links per snapshot; `/v2/` in the built-in server; `oci:` config section | docker, podman, skopeo and crane pull by tag and digest, single- and multi-arch; `garner verify` checks the tree | Done (`TestOCIClients`) |
 | O3 | Push: upload sessions, manifests, token auth on `/v2/`, ownership, `DELETE` | `docker push` and a multi-arch `docker buildx imagetools create` work and can be pulled after publish; `docker login` rejects a bad token; anonymous pulls work; another owner's push is refused | Done (`TestOCIClients`, `TestOCIPushRefusedForOtherOwner`, unit tests for chunks, resume and digests) |
 | O4 | Registry sync: local client, `registries:`, image sources, tag globs, `min_release_age` from first sight | Unit tests against a fake registry with Bearer auth on another host and a CDN redirect that must not get credentials | Done; also against ghcr.io, Docker Hub and registry.gitlab.com (below) |
-| O5 | Landing page, `garner.1`, `garner.yaml.5`, `docs/configuration.md`, `contrib/garner.yaml`, README proxy examples | `just check` and `just e2e` pass | Done |
+| O5 | UI, `garner.1`, `garner.yaml.5`, `docs/configuration.md`, `contrib/garner.yaml`, README proxy examples | `just check` and `just e2e` pass | Done |
 
 Settled while building:
 
@@ -216,8 +216,8 @@ corpus of 536 packages:
 - Through Caddy: `docker login` refused a bad token; `docker push` and
   `docker buildx imagetools create` (a multi-arch index, its blobs mounted
   from another name) worked; a push to a source-owned name was refused;
-  anonymous pulls, an arm64 pull and the tag list worked; the landing
-  page listed the images.
+  anonymous pulls, an arm64 pull and the tag list worked; the UI
+  listed the images.
 - Tag `DELETE` (admin only), `garner remove` of an image name with `/`,
   publish, GC and `garner verify` (no problems, 550 packages), and apt on
   the host, all after the upgrade.
@@ -234,14 +234,14 @@ Not verified yet:
   registry's `max_concurrent` is an in-process limit, and the client
   cache is guarded by a Go mutex.
 
-## Landing page by ecosystem (after 0.1.0)
+## UI by ecosystem (after 0.1.0)
 
 Done; design section 14. One tab per ecosystem (formats grouped by
 namespace) with a summary, then every package or image of the tab,
 paged 25 at a time with a filter. Separate `packages.html` and
 `images.html` pages were tried first and dropped for the in-tab lists.
-`TestLandingByEcosystem` renders deb, rpm and images and checks each
-list stays in its tab; `TestLandingManyImages` lists 501 images in the
+`TestUIByEcosystem` renders deb, rpm and images and checks each
+list stays in its tab; `TestUIManyImages` lists 501 images in the
 page. Paging and filtering were checked in headless Chromium (25 of 501
 rows shown); not checked with screen readers. `index.html` grows with
 the number of names, about 150 KB for 500 images.

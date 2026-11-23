@@ -1,8 +1,8 @@
-// Command garner-preview serves the landing page with demo packages, for
+// Command garner-preview serves the UI with demo packages, for
 // working on the page. It is a development tool and not part of a release.
 //
 // It builds a throwaway repository in a temporary directory, publishes it,
-// and serves it with a made-up /api/v1/status. landing.html is read from
+// and serves it with a made-up /api/v1/status. ui.html is read from
 // disk: an edit republishes and reloads open browser tabs. A restart (for
 // changes to Go code) also reloads them once the preview is back.
 //
@@ -46,7 +46,7 @@ import (
 
 func main() {
 	listen := flag.String("listen", "localhost:8090", "address to serve on")
-	dir := flag.String("templates", "internal/publish", "directory holding landing.html")
+	dir := flag.String("templates", "internal/publish", "directory holding ui.html")
 	testdata := flag.String("rpm-testdata", "internal/rpm/testdata", "directory holding the demo .rpm files")
 	sources := flag.Int("sources", 4, "sync sources in the status, alternately forge and registry")
 	failing := flag.Int("failing", 1, "how many of the sources report an error")
@@ -67,7 +67,7 @@ type status struct {
 }
 
 func run(log *slog.Logger, listen, dir, testdata string, extra int, st status) error {
-	if _, err := os.Stat(filepath.Join(dir, "landing.html")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "ui.html")); err != nil {
 		return fmt.Errorf("%w (run from the repository root, or pass -templates)", err)
 	}
 	ln, err := net.Listen("tcp", listen)
@@ -92,7 +92,7 @@ func run(log *slog.Logger, listen, dir, testdata string, extra int, st status) e
 	}
 	r.republish(ctx)
 
-	go r.watch(ctx, filepath.Join(dir, "landing.html"))
+	go r.watch(ctx, filepath.Join(dir, "ui.html"))
 	srv := &http.Server{Handler: r.handler(st)}
 	go func() {
 		<-ctx.Done()
@@ -167,7 +167,7 @@ func newRepo(ctx context.Context, log *slog.Logger, root, url, dir string) (*rep
 		log: log, root: root, db: d, rpm: hasRPM, changed: make(chan struct{}),
 		in: &ingest.Ingester{Store: st, Blobs: blobs, Formats: reg, Config: conf, TmpDir: root, Log: quiet},
 		pub: &publish.Publisher{Store: st, Blobs: blobs, Formats: reg, Config: conf, Signer: signer,
-			Root: root, Log: quiet, LandingFS: os.DirFS(dir)},
+			Root: root, Log: quiet, UIFS: os.DirFS(dir)},
 	}, nil
 }
 

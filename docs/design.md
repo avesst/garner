@@ -79,7 +79,7 @@ PostgreSQL come later (section 18).
 ### Process model
 
 - One process (`garner serve`) does everything: it serves the repository,
-  the landing page and the API, accepts uploads, and runs sync, publish,
+  the UI and the API, accepts uploads, and runs sync, publish,
   retention and garbage collection.
 - At startup it takes an `flock` on `<db>.lock` and refuses to start if
   another process holds it.
@@ -104,7 +104,7 @@ Multiple nodes and separate roles are later extensions (section 18).
 ### Public URLs
 
 ```
-/                         landing page (static per snapshot, live status)
+/                         UI (static per snapshot, live status)
 /key.asc                  public key(s), ASCII-armored
 /key.gpg                  public key(s), binary keyring (for apt Signed-By)
 /garner.sources           generated deb822 client file
@@ -150,7 +150,7 @@ The file name prefix of the generated client files (`garner`) comes from
   version will see apt treat them as one package; clients are expected to
   enable the suite for their own OS release.
 
-Client example (the landing page renders this):
+Client example (the UI renders this):
 
 ```
 Types: deb
@@ -225,12 +225,12 @@ falls back to copying.
 
 `public/current` is the only symlink whose target changes. Every other link
 in `public/` has a fixed target through `current`, so one `rename(2)` switches
-deb, rpm, the landing page, the keys and the client files together, and a
+deb, rpm, the UI, the keys and the client files together, and a
 client never sees two snapshots at once. A publish creates fixed links that
 are missing (a new suite, release or architecture) and removes those no
 longer configured; it never retargets them.
 
-The landing page, keys and client files belong to the snapshot so that they
+The UI, keys and client files belong to the snapshot so that they
 change with it. During key rotation (section 10), the published keyring then
 always matches the signatures on the current metadata.
 
@@ -272,7 +272,7 @@ A single YAML file holds human decisions. The database holds state.
 - Reload with `SIGHUP` or `garner reload`. An invalid file is rejected,
   logged, and the last good configuration stays active.
 - The configuration hash (and the git commit, if the file is inside a git
-  working tree) is shown on the landing page and in `/api/v1/status`.
+  working tree) is shown in the UI and in `/api/v1/status`.
 - The CLI never modifies anything the file defines.
 
 [configuration.md](configuration.md) lists every key with its default and
@@ -673,8 +673,8 @@ when another file of the same version is already in the distribution.
 2. Select active placements and apply retention: keep the newest N versions
    per (name, distribution, arch), plus all `pinned` packages.
 3. Render metadata into `snapshots/<id>/` (ULID): deb `Packages`, `Release`,
-   by-hash; rpm `primary`, `filelists`, `other`, `repomd.xml`; the landing
-   page, keys and client files.
+   by-hash; rpm `primary`, `filelists`, `other`, `repomd.xml`; the UI,
+   keys and client files.
 4. Carry over index history: hardlink into the new snapshot's `by-hash/`
    (deb) and `repodata/` (rpm) the index files of every snapshot published
    within `storage.index_history` (default 1 h), and always those of the
@@ -913,7 +913,7 @@ the configuration and database are reachable. The others call the API with
 | `POST /api/v1/verify` | publish |
 | `POST/GET/DELETE /api/v1/tokens` | admin |
 
-### Landing page
+### UI
 
 A static page, rendered into each snapshot at publish (section 4). It is
 organized by ecosystem: the enabled formats of one namespace (deb and rpm
@@ -960,7 +960,7 @@ There are no download statistics, no login and no write actions.
 ### MVP
 
 1. `serve`, `init`, `config validate`, reload, SQLite, local storage, signing,
-   atomic publish with snapshots and rollback, landing page and client files.
+   atomic publish with snapshots and rollback, UI and client files.
 2. Upload API and CLI, tokens with scopes and owners, name ownership.
 3. Forge sync for GitHub (single repo and org) with asset rules, verification,
    retention and approval.
@@ -1075,7 +1075,7 @@ section keeps the earlier design so the MVP does not close it off.
 
 ### Design
 
-- Every node runs `garner serve` and serves the repository, the landing page
+- Every node runs `garner serve` and serves the repository, the UI
   and the API, and accepts uploads.
 - One node is the leader and runs sync, publish, retention and garbage
   collection. Leadership is a PostgreSQL session-level advisory lock; if the
@@ -1391,15 +1391,15 @@ sources:
 - Optional interfaces carry the rest, so deb and rpm are unchanged:
   `BlobPooler` (blobs pooled by digest), `RetentionDefaulter`,
   `RegistryFormat` (delivered by registry sources) and `Lister` (its own
-  landing page section).
+  UI section).
 
-### Verification and landing page
+### Verification and UI
 
 - `garner verify` checks that every tag and digest file parses, that its
   digest, suffix and media type agree with the database and the
   snapshot's tags, that `tags/list` lists exactly those tags, and that
   every blob a package references is in the pool with its recorded size.
-- The landing page has a Container images tab (section 14): how to pull
+- The UI has a Container images tab (section 14): how to pull
   and push, with the host taken from `server.public_url`, and counts of
   images, tags, platforms and images per top-level namespace, then every
   image, paged and filterable. Clients need https, or the host in

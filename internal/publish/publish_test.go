@@ -160,7 +160,7 @@ func TestPublishDeb(t *testing.T) {
 	page := f.read(t, "index.html")
 	fp := f.keys.Fingerprint()
 	if !strings.Contains(page, "<span>"+fp[:4]+"</span> <span>"+fp[4:8]+"</span>") || !strings.Contains(page, snap.ID) {
-		t.Error("landing page lacks fingerprint or snapshot id")
+		t.Error("UI lacks fingerprint or snapshot id")
 	}
 	// Packages: one amd64 and one arch-independent in stable; arm64 is
 	// configured but empty.
@@ -170,17 +170,17 @@ func TestPublishDeb(t *testing.T) {
 		"2 packages in this snapshot.",
 	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("landing page lacks %q", want)
+			t.Errorf("UI lacks %q", want)
 		}
 	}
 	if strings.Contains(page, "ZgotmplZ") {
-		t.Error("landing page has a value the template escaper rejected")
+		t.Error("UI has a value the template escaper rejected")
 	}
 	// The same page is served inside snapshots/<id>/, so the status URL is
 	// resolved from the page's location. The snapshot ID is shown, not linked.
 	if !strings.Contains(page, `fetch(base + "api/v1/status"`) ||
 		strings.Contains(page, `href="/snapshots/`) || strings.Contains(page, `href="snapshots/`) {
-		t.Error("landing page does not resolve the status URL from its location or links to the snapshot")
+		t.Error("UI does not resolve the status URL from its location or links to the snapshot")
 	}
 
 	if gpgv, err := exec.LookPath("gpgv"); err == nil {
@@ -737,7 +737,7 @@ func TestLinksAreReconciled(t *testing.T) {
 
 // The page may be reached through a proxy that strips public_url's path, so
 // its path must not be baked into the status URL.
-func TestLandingStatusIgnoresPublicURLPath(t *testing.T) {
+func TestUIStatusIgnoresPublicURLPath(t *testing.T) {
 	f := newFixture(t)
 	f.cfg.Server.PublicURL = "http://repo.test/garner/"
 	f.publish(t)
@@ -748,7 +748,7 @@ func TestLandingStatusIgnoresPublicURLPath(t *testing.T) {
 }
 
 // The default suite's client file is served at the root, the others below
-// clients/. Each installs as the same local file, and the landing page
+// clients/. Each installs as the same local file, and the UI
 // offers all of them.
 func TestClientFilePerSuite(t *testing.T) {
 	f := newFixture(t)
@@ -768,11 +768,11 @@ func TestClientFilePerSuite(t *testing.T) {
 		`<a href="clients/testing/garner.sources">garner.sources</a>`,
 	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("landing page lacks %q", want)
+			t.Errorf("UI lacks %q", want)
 		}
 	}
 	if strings.Contains(page, "Edit Suites:") || strings.Contains(page, "garner-testing") {
-		t.Error("landing page tells users to edit the suite by hand or installs a second source")
+		t.Error("UI tells users to edit the suite by hand or installs a second source")
 	}
 
 	// With one suite left, the clients link goes away.

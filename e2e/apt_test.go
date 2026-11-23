@@ -13,7 +13,7 @@ import (
 )
 
 // aptSetup replaces the image's sources with garner's, fetching the key
-// and the .sources file the way the landing page tells users to.
+// and the .sources file the way the UI tells users to.
 func aptSetup(url string) string {
 	return fmt.Sprintf(`
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*

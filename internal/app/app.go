@@ -309,7 +309,7 @@ func (a *App) Reload() error {
 	for _, fn := range a.OnReload {
 		fn(cfg)
 	}
-	// Suites, architectures, keys and the landing page may have changed.
+	// Suites, architectures, keys and the UI may have changed.
 	a.Resigner.Request()
 	a.Scheduler.Request()
 	return nil
