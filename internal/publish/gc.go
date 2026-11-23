@@ -145,7 +145,7 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		}
 	}
 	for _, dir := range []string{filepath.Join(p.Root, "blobs", "tmp"), filepath.Join(p.Root, "tmp")} {
-		n, err := sweep(dir, func(path string, d fs.DirEntry) bool { return old(d) })
+		n, err := sweepTemp(dir, now.Add(-grace))
 		if err != nil {
 			return nil, err
 		}
@@ -239,6 +239,70 @@ func sweep(root string, remove func(path string, d fs.DirEntry) bool) (int, erro
 		os.Remove(dirs[i]) // fails, harmlessly, unless empty
 	}
 	return n, err
+}
+
+// sweepTemp removes the stale entries directly below root (staleTemp)
+// and returns how many files went with them.
+func sweepTemp(root string, cutoff time.Time) (int, error) {
+	stale, n, err := staleTemp(root, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	for _, path := range stale {
+		if err := os.RemoveAll(path); err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
+}
+
+// staleTemp returns the entries directly below root that nothing has
+// written since cutoff, and how many files they hold. A directory is one
+// unit, judged by the newest of itself and everything in it: a sync keeps
+// earlier files in its directory while it works on later ones, and an
+// empty directory may be waiting for its first file. Whoever holds a temp
+// directory and may pause longer than gc_grace without writing to it
+// touches it (sync.syncRelease). A missing root is not an error.
+func staleTemp(root string, cutoff time.Time) ([]string, int, error) {
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var stale []string
+	n := 0
+	for _, e := range entries {
+		path := filepath.Join(root, e.Name())
+		fresh, files := false, 0
+		err := filepath.WalkDir(path, func(_ string, d fs.DirEntry, err error) error {
+			if err == nil {
+				var info fs.FileInfo
+				if info, err = d.Info(); err == nil {
+					if !info.ModTime().Before(cutoff) {
+						fresh = true
+						return filepath.SkipAll
+					}
+					if !d.IsDir() {
+						files++
+					}
+				}
+			}
+			if os.IsNotExist(err) {
+				return nil // removed by its owner meanwhile
+			}
+			return err
+		})
+		if err != nil {
+			return nil, 0, err
+		}
+		if !fresh {
+			stale = append(stale, path)
+			n += files
+		}
+	}
+	return stale, n, nil
 }
 
 // poolGarbage returns whether a file below a format's pool directory root

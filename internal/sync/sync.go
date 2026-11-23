@@ -950,7 +950,12 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 	settings := r.cfg.Settings(r.src)
 	var errs []error
 	var ready []*asset
+	// GC judges tmp by its newest write (publish.sweepTemp). Touching it
+	// before each step keeps the files already downloaded while a later
+	// download or ingest takes longer than gc_grace.
+	touch := func() { now := time.Now(); os.Chtimes(tmp, now, now) }
 	for _, a := range cands {
+		touch()
 		da, err := r.download(ctx, a, tmp)
 		if err != nil {
 			err = fmt.Errorf("%s: %w", a.Name, err)
@@ -1006,6 +1011,7 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 			r.conflict("asset-mapping", repo, rel, a.Name, "assets map to the same package and distribution: "+strings.Join(names, ", "))
 			continue
 		}
+		touch()
 		if err := r.ingest(ctx, repo, rel, a, settings); err != nil {
 			err = fmt.Errorf("%s: %w", a.Name, err)
 			var ie *ingest.Error

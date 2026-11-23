@@ -378,7 +378,9 @@ func (p *Publisher) verifyGarbage(ctx context.Context, grace time.Duration, add 
 		add(format.Warnf("garbage", blobs, "%d blob files without a database row; GC removes them", n))
 	}
 	for _, dir := range []string{filepath.Join(p.Root, "blobs", "tmp"), filepath.Join(p.Root, "tmp")} {
-		if n := count(dir, func(path string, d fs.DirEntry) bool { return old(d) }); n > 0 {
+		if _, n, err := staleTemp(dir, time.Now().Add(-grace)); err != nil {
+			return err
+		} else if n > 0 {
 			add(format.Warnf("garbage", dir, "%d temporary files older than gc_grace, left by failed uploads; GC removes them", n))
 		}
 	}

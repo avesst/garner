@@ -26,6 +26,7 @@ import (
 	"github.com/avesst/garner/internal/forge"
 	"github.com/avesst/garner/internal/format"
 	"github.com/avesst/garner/internal/ingest"
+	"github.com/avesst/garner/internal/publish"
 	"github.com/avesst/garner/internal/server"
 	"github.com/avesst/garner/internal/store"
 )
@@ -44,6 +45,8 @@ type fakeForge struct {
 	unlisted  map[string]bool   // release ID -> left out of listings, found by ID
 	renamed   map[string]string // old release ID -> the ID the release has now
 	lookFail  map[string]bool   // release ID -> lookup by ID fails
+	// onDownload runs before an asset's body is served.
+	onDownload func(name string)
 
 	mu        gosync.Mutex
 	calls     map[string]int           // repo -> Releases calls
@@ -119,6 +122,9 @@ func (f *fakeForge) Download(_ context.Context, a forge.Asset) (io.ReadCloser, e
 	f.mu.Lock()
 	f.downloads = append(f.downloads, a.Name)
 	f.mu.Unlock()
+	if f.onDownload != nil {
+		f.onDownload(a.Name)
+	}
 	if f.fail[a.URL] {
 		return nil, errors.New("connection reset")
 	}
@@ -987,5 +993,40 @@ func TestBrokenForgeFailsOnlyItsSources(t *testing.T) {
 	f.m.RunOnce(context.Background(), other)
 	if st, _ = f.st.SourceState(context.Background(), "other"); st.LastError != "" {
 		t.Errorf("LastError after fix = %q, want none", st.LastError)
+	}
+}
+
+// GC during a release must keep the release's temp directory: empty
+// while the first asset downloads, and holding assets downloaded longer
+// than gc_grace ago while a later one downloads.
+func TestGCKeepsTempDirOfRunningSync(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "src", Repo: "o/r"})
+	root := f.m.TmpDir
+	tmp := filepath.Join(root, "tmp") // storage.path/tmp, as app.Open wires it
+	if err := os.Mkdir(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.m.TmpDir, f.m.Ingester.TmpDir = tmp, tmp
+	pub := &publish.Publisher{Store: f.st, Blobs: f.m.Ingester.Blobs, Formats: f.m.Formats,
+		Config: f.m.Config, Root: root, Log: f.m.Log}
+	long := time.Now().Add(-2 * f.cfg.Storage.GCGrace)
+	f.forge.onDownload = func(string) {
+		// The assets so far were downloaded long ago.
+		files, _ := filepath.Glob(filepath.Join(tmp, "sync-*", "*"))
+		for _, p := range files {
+			os.Chtimes(p, long, long)
+		}
+		if _, err := pub.GC(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}
+	rel := f.release("o/r", "1", 1)
+	f.forge.add(rel, "aa_1.0_amd64.deb", debtest.Build("aa", "1.0", "amd64", "aa"))
+	f.forge.add(rel, "bb_1.0_amd64.deb", debtest.Build("bb", "1.0", "amd64", "bb"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("sync failed: %s", st.LastError)
+	}
+	if got := f.placed(); len(got) != 2 {
+		t.Fatalf("placed %v, want aa and bb", got)
 	}
 }
