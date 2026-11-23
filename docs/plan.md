@@ -14,6 +14,9 @@ each piece is done. Update it as slices land.
   migrations on PostgreSQL; `e2e.yml` runs `just e2e`, except for pushes
   that change only documentation, `contrib/` or `scripts/`.
 - Integration tests run real clients in containers (Docker locally and in CI).
+- `just preview` (`cmd/garner-preview`) serves the landing page with demo
+  packages and a made-up status, and reloads it when `landing.html` changes.
+  It is a development tool; releases build only `cmd/garner`.
 
 ## MVP step 1, as slices
 

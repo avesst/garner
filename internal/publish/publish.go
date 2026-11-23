@@ -46,6 +46,9 @@ type Publisher struct {
 	Collect []func(context.Context) error
 	// Now is GC's clock for staged blobs; tests replace it.
 	Now func() time.Time
+	// LandingFS, if set, holds landing.html, read on every publish in
+	// place of the embedded copy. Only the preview sets it.
+	LandingFS fs.FS
 
 	// mu allows one publish at a time. With multiple nodes this becomes a
 	// database lock held by the leader (section 18).
