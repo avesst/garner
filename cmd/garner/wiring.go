@@ -70,7 +70,7 @@ func startSync(a *app.App) error {
 	a.Syncer = syncManager
 	a.OnReload = append(a.OnReload, func(*config.Config) {
 		if err := syncManager.Restart(); err != nil {
-			a.Log.Error("sync not restarted after reload", "err", err)
+			a.Log.Error("sync restarted without some forges; their sources fail until fixed", "err", err)
 		}
 	})
 	return nil
@@ -80,7 +80,7 @@ func startSync(a *app.App) error {
 func backgroundLoops(a *app.App) []func(context.Context) {
 	return []func(context.Context){func(ctx context.Context) {
 		if err := syncManager.Start(ctx); err != nil {
-			a.Log.Error("sync not started", "err", err)
+			a.Log.Error("sync started without some forges; their sources fail until fixed", "err", err)
 		}
 		<-ctx.Done()
 		syncManager.Stop()

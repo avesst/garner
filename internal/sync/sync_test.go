@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -819,5 +820,54 @@ func TestStatusKind(t *testing.T) {
 	}
 	if kinds["tool"] != server.KindForge || kinds["img"] != server.KindRegistry {
 		t.Errorf("kinds %v", kinds)
+	}
+}
+
+// A forge whose client cannot be built fails only its own sources: the
+// others still start, and its sources report the error until a reload
+// builds the client.
+func TestBrokenForgeFailsOnlyItsSources(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	cfg := *f.cfg
+	cfg.Forges = append(slices.Clone(cfg.Forges), config.Forge{Name: "broken", Type: "gitlab", URL: "https://x", MaxConcurrent: 1})
+	cfg.Sources = append(slices.Clone(cfg.Sources), config.Source{Name: "other", Forge: "broken", Repo: "org/other"})
+	f.live.Store(&cfg)
+	broken := true
+	f.m.NewClient = func(fc config.Forge) (forge.Client, error) {
+		if fc.Name == "broken" && broken {
+			return nil, errors.New("token_file: permission denied")
+		}
+		return f.forge, nil
+	}
+	f.m.MaxStartDelay = time.Hour
+
+	if err := f.m.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "broken") {
+		t.Errorf("Start: got %v, want an error naming forge broken", err)
+	}
+	for _, name := range []string{"tool", "other"} {
+		if err := f.m.Trigger(name); err != nil {
+			t.Errorf("source %s not started: %v", name, err)
+		}
+	}
+	f.m.Stop()
+
+	other := cfg.Sources[1]
+	f.m.RunOnce(context.Background(), other)
+	st, err := f.st.SourceState(context.Background(), "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.LastError, "token_file: permission denied") {
+		t.Errorf("LastError = %q, want the client error", st.LastError)
+	}
+
+	broken = false
+	if err := f.m.Start(context.Background()); err != nil {
+		t.Fatalf("Start after fix: %v", err)
+	}
+	f.m.Stop()
+	f.m.RunOnce(context.Background(), other)
+	if st, _ = f.st.SourceState(context.Background(), "other"); st.LastError != "" {
+		t.Errorf("LastError after fix = %q, want none", st.LastError)
 	}
 }

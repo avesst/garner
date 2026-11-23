@@ -65,7 +65,10 @@ type Manager struct {
 	// once and the map holds one entry per release.
 	notCovering map[string]time.Time
 	clients     map[string]forge.Client
-	wg          gosync.WaitGroup
+	// clientErrs holds why a forge's client could not be built; its
+	// sources fail with that error until a reload builds it.
+	clientErrs map[string]error
+	wg         gosync.WaitGroup
 
 	lastSuccess *metrics.Vec
 	errors      *metrics.Vec
@@ -151,6 +154,10 @@ func (m *Manager) Start(ctx context.Context) error {
 // sources get a new loop, removed ones are stopped. It does not wait for
 // running syncs: a cancelled sync stops at its next step and its release
 // stays unseen, so the next run retries it.
+//
+// A forge whose client cannot be built does not stop the others: every
+// source still gets its loop, the forge's sources fail with the client
+// error on each run, and Restart returns the joined errors.
 func (m *Manager) Restart() error {
 	cfg := m.Config()
 	if m.Images != nil {
@@ -161,22 +168,29 @@ func (m *Manager) Restart() error {
 		newClient = forge.New
 	}
 	clients := map[string]forge.Client{}
+	clientErrs := map[string]error{}
 	forges := map[string]config.Forge{}
+	var errs []error
 	for _, f := range cfg.Forges {
+		forges[f.Name] = f
 		c, err := newClient(f)
 		if err != nil {
-			return fmt.Errorf("forge %s: %w", f.Name, err)
+			err = fmt.Errorf("forge %s: %w", f.Name, err)
+			clientErrs[f.Name] = err
+			errs = append(errs, err)
+			continue
 		}
 		clients[f.Name] = c
-		forges[f.Name] = f
 	}
+	startErr := errors.Join(errs...)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.base == nil || m.base.Err() != nil {
-		return nil
+		return startErr
 	}
 	m.clients = clients
+	m.clientErrs = clientErrs
 	if m.workers == nil {
 		m.workers = map[string]*worker{}
 	}
@@ -213,7 +227,7 @@ func (m *Manager) Restart() error {
 			m.loop(ctx, name, w.trig)
 		}()
 	}
-	return nil
+	return startErr
 }
 
 // Stop ends every poll loop and waits for running syncs, for shutdown.
@@ -343,6 +357,7 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 	}
 	m.running[src.Name] = true
 	client := m.clients[src.Forge]
+	clientErr := m.clientErrs[src.Forge]
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -357,7 +372,7 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 		return true
 	}
 	st.LastRun = store.Now()
-	run := &run{m: m, src: src, cfg: m.Config(), client: client, state: st, log: log,
+	run := &run{m: m, src: src, cfg: m.Config(), client: client, clientErr: clientErr, state: st, log: log,
 		wasDeferred: map[string]bool{}, deferredRepos: map[string]bool{}}
 	m.mu.Lock()
 	run.prevDeferred = slices.Clone(m.deferred[src.Name])
@@ -395,15 +410,17 @@ func (m *Manager) RunOnce(ctx context.Context, src config.Source) bool {
 
 // run is one sync of one source.
 type run struct {
-	m        *Manager
-	src      config.Source
-	cfg      *config.Config
-	client   forge.Client
-	state    *store.SourceState
-	log      *slog.Logger
-	added    int
-	skipped  []string
-	deferred []server.DeferredRelease
+	m      *Manager
+	src    config.Source
+	cfg    *config.Config
+	client forge.Client
+	// clientErr is why client is nil, when its forge's client failed.
+	clientErr error
+	state     *store.SourceState
+	log       *slog.Logger
+	added     int
+	skipped   []string
+	deferred  []server.DeferredRelease
 	// prevDeferred is the previous run's list; wasDeferred holds its
 	// repo@tag, so each release is logged once rather than on every poll.
 	prevDeferred []server.DeferredRelease
@@ -429,6 +446,9 @@ func (r *run) sync(ctx context.Context) error {
 		return err
 	}
 	if r.client == nil {
+		if r.clientErr != nil {
+			return r.clientErr
+		}
 		return fmt.Errorf("unknown forge %q", r.src.Forge)
 	}
 	repos, err := r.repos(ctx)
