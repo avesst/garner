@@ -140,6 +140,10 @@ func TestInvalid(t *testing.T) {
 		{"release without rpm", minimal + "forges:\n  - {name: gh, type: github}\nsources:\n  - name: s\n    forge: gh\n    repo: a/b\n    assets:\n      - {match: \"*\", release: stable}\n", []string{"sources[0].assets[0].release: set, but rpm is not configured"}},
 		{"oci retention", serverOnly + "oci:\n  retention: -1\n", []string{"oci.retention: must not be negative"}},
 		{"oci expiry", serverOnly + "oci:\n  upload_expiry: 10s\n", []string{"oci.upload_expiry"}},
+		{"oci public_url with path", serverOnly + "oci:\n  public_url: https://reg.example/v2\n", []string{"oci.public_url"}},
+		{"oci public_url not http", serverOnly + "oci:\n  public_url: reg.example\n", []string{"oci.public_url"}},
+		{"oci public_url with credentials", serverOnly + "oci:\n  public_url: https://u:secret@reg.example\n", []string{"oci.public_url", "u:xxxxx@"}},
+		{"public_url with credentials", "deb: {}\nserver:\n  public_url: https://u:secret@repo.example\n", []string{"server.public_url", "u:xxxxx@"}},
 		{"registry over http", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"http://reg\"}\n", []string{"registries[0].url"}},
 		{"registry with path", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg/v2\"}\n", []string{"without a path"}},
 		{"username without token", serverOnly + "oci: {}\nregistries:\n  - {name: r, url: \"https://reg\", username: u}\n", []string{"needs token_env or token_file"}},
@@ -167,6 +171,16 @@ func TestInvalid(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOCIPublicURLWithTrailingSlashIsValid(t *testing.T) {
+	cfg, err := Parse([]byte(serverOnly + "oci:\n  public_url: https://reg.example/\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OCI.PublicURL != "https://reg.example/" {
+		t.Errorf("oci.public_url = %q", cfg.OCI.PublicURL)
 	}
 }
 

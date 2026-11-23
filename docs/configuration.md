@@ -36,7 +36,7 @@ the defaults below.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `listen` | listen address | `:8080` | Where the HTTP server listens. Changing it needs a restart. |
-| `public_url` | URL, **required** | none | The URL clients use. It goes into the apt and dnf client files and the UI, and its host is the registry host that image names start with. Must be an absolute `http` or `https` URL without a query or fragment. A path is allowed, for example `https://example.com/garner/`. |
+| `public_url` | URL, **required** | none | The URL clients use. It goes into the apt and dnf client files and the UI, and its host is the registry host that image names start with, unless `oci.public_url` is set. Must be an absolute `http` or `https` URL without credentials, a query or a fragment. A path is allowed, for example `https://example.com/garner/`; the registry still sits at `/v2/` on the host root (see `oci`). |
 | `client_name` | name | `garner` | Prefix of the files clients install: `<name>.sources`, `<name>.repo`, `/usr/share/keyrings/<name>.gpg`, and the dnf repo ID. Lowercase letters, digits, `.`, `_` and `-`; must start with a letter or digit. |
 | `trusted_proxies` | list of IPs or CIDR prefixes | `[]` | Reverse proxies whose `X-Forwarded-*` headers are honoured. Authenticated requests are accepted only from loopback, or from one of these with `X-Forwarded-Proto: https`. Others get `403`. |
 | `allow_insecure_auth` | bool | `false` | Accept authenticated requests over plain HTTP from any address. Tokens then travel unencrypted, so use this only on an isolated lab network. |
@@ -123,13 +123,20 @@ of a disabled format are rejected.
 
 Present: garner is a container registry at `/v2/` on the host root, which
 `docker push`, `docker pull` and other OCI clients use. Absent: images are
-disabled. Images are pushed or synced from registries, never uploaded with
+disabled.
+
+The registry's URL is `oci.public_url`, or else the scheme and host of
+`server.public_url`. A path in `server.public_url` is dropped, since OCI
+clients only look for `/v2/` at the host root: with `server.public_url:
+https://example.com/garner/`, images are `example.com/<name>` and the
+reverse proxy must pass `example.com/v2/` to garner as well. Images are pushed or synced from registries, never uploaded with
 `garner upload`. Pushes need a token with the `upload` scope, used with
 `docker login <host> -u <token name>` and the token's secret as the
 password.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `public_url` | URL | scheme and host of `server.public_url` | The registry's URL, when it differs from that default: its host is the one image names start with, in the UI's pull commands and in the token realm. Give the registry a hostname of its own here (for example `https://registry.example.com`) to move images to another registry later by changing DNS, without changing image references. The reverse proxy must send that host's `/v2/` to garner too. garner answers `/v2/` on every host it receives, so references to `server.public_url`'s host keep working after this key is added; the reverse proxy decides which hostnames serve `/v2/`. Must be an absolute `http` or `https` URL without credentials, a path, a query or a fragment. |
 | `retention` | integer | `10` | Untagged manifests kept per image name, newest first, besides every tagged one. A manifest becomes untagged when its tag moves to a newer push; deployments that pin digests keep working until it ages out. `0` keeps all. Also applies to images from a registry source that does not set its own `retention`; `defaults.retention` does not apply to images. |
 | `upload_expiry` | duration | `24h` | How long a pushed blob that no manifest uses yet, and an idle upload session, are kept before GC removes them. Must be at least `1m`. |
 

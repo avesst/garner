@@ -61,6 +61,13 @@ func (c *Config) Validate() error {
 		if c.OCI.Retention < 0 {
 			p.add("oci.retention", "must not be negative, got %d", c.OCI.Retention)
 		}
+		if u := c.OCI.PublicURL; u != "" {
+			if pu, err := url.Parse(u); err != nil ||
+				(pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" || pu.User != nil ||
+				(pu.Path != "" && pu.Path != "/") || pu.RawQuery != "" || pu.Fragment != "" {
+				p.add("oci.public_url", "must be an absolute http or https URL without credentials, path, query or fragment (clients find the registry at /v2/ on the host root), got %q", redactURL(u))
+			}
+		}
 		if c.OCI.UploadExpiry < time.Minute {
 			p.add("oci.upload_expiry", "must be at least 1m, got %s", c.OCI.UploadExpiry)
 		}
@@ -96,9 +103,9 @@ func (c *Config) validateServer(p *problems) {
 	if s.PublicURL == "" {
 		p.add("server.public_url", "is required")
 	} else if u, err := url.Parse(s.PublicURL); err != nil ||
-		(u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		(u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
 		u.RawQuery != "" || u.Fragment != "" {
-		p.add("server.public_url", "must be an absolute http or https URL without query or fragment, got %q", s.PublicURL)
+		p.add("server.public_url", "must be an absolute http or https URL without credentials, query or fragment, got %q", redactURL(s.PublicURL))
 	}
 	if !reClientName.MatchString(s.ClientName) {
 		p.add("server.client_name", "must match %s, got %q", reClientName, s.ClientName)
@@ -494,4 +501,13 @@ func (c *Config) validateOwnership(p *problems) {
 			}
 		}
 	}
+}
+
+// redactURL hides a password in raw, so that a validation error does not
+// log it.
+func redactURL(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Redacted()
+	}
+	return raw
 }

@@ -1203,6 +1203,14 @@ requests set as clients expect. The README's proxy examples forward
 `/v2/` to garner. Under systemd the listening socket survives a restart,
 so pulls wait rather than fail.
 
+The registry's URL is `oci.public_url`, or else the scheme and host of
+`server.public_url`; a path is dropped, since clients look for `/v2/`
+only at the host root. It goes into the token realm, the UI's pull
+commands and its tag-list links. A hostname of its own decouples image
+references from garner: moving images to another registry later is a
+DNS change. garner answers `/v2/` on any host it receives, so both names
+can point at one server, and the proxy decides which of them serve it.
+
 The snapshot tree is laid out so that a proxy could serve pulls itself.
 That split, below, is not shipped as a tested proxy configuration:
 
@@ -1284,7 +1292,7 @@ Authentication:
   11). Push needs `upload`.
 - `/v2/` uses the distribution spec's token flow. `GET /v2/` without
   credentials, and a push without them, answer `401` with
-  `WWW-Authenticate: Bearer realm="<public_url host>/v2/token",service="garner"`
+  `WWW-Authenticate: Bearer realm="<registry host>/v2/token",service="garner"`
   (a push adds its `scope`). `GET /v2/token` gives a client without
   credentials an anonymous token, which passes `GET /v2/` and nothing
   else. With Basic credentials it checks them under the rule above and
@@ -1302,6 +1310,7 @@ Authentication:
 
 ```yaml
 oci:
+  public_url: https://registry.example.com   # default: server.public_url's host
   retention: 10               # untagged manifests kept per name
   upload_expiry: 24h
 
@@ -1411,7 +1420,8 @@ sources:
   snapshot's tags, that `tags/list` lists exactly those tags, and that
   every blob a package references is in the pool with its recorded size.
 - The UI has a Container images tab (section 14): how to pull
-  and push, with the host taken from `server.public_url`, and counts of
+  and push, with the host taken from `oci.public_url` or else
+  `server.public_url`, and counts of
   images, tags, platforms and images per top-level namespace, then every
   image, paged and filterable. Clients need https, or the host in
   their `insecure-registries`.

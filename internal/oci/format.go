@@ -311,6 +311,7 @@ func namespaceOf(name string) string {
 // Summary counts the images, tags and platforms, and the images per
 // top-level namespace.
 func (Format) Summary(c *config.Config, publicURL string, pkgs []*format.Package, tags []format.Tag) format.Summary {
+	publicURL = registryURL(c, publicURL)
 	host := registryHost(publicURL)
 	sum := format.Summary{Usage: "docker pull " + host + "/<name>:<tag>\n" +
 		"# to push: docker login " + host + " -u <token name> (the token secret is the password)"}
@@ -358,6 +359,7 @@ func (Format) Summary(c *config.Config, publicURL string, pkgs []*format.Package
 // Rows lists every image: its newest tags by push time, platforms and a
 // pull command.
 func (Format) Rows(c *config.Config, publicURL string, pkgs []*format.Package, tags []format.Tag) []format.Row {
+	publicURL = registryURL(c, publicURL)
 	host := registryHost(publicURL)
 	byName := map[string][]*format.Package{}
 	byID := map[string]*format.Package{}
@@ -389,7 +391,7 @@ func (Format) Rows(c *config.Config, publicURL string, pkgs []*format.Package, t
 		for i, t := range ts {
 			if i == maxTags {
 				row.MoreTags = len(ts) - maxTags
-				row.TagsURL = strings.TrimRight(publicURL, "/") + "/v2/" + n + "/tags/list"
+				row.TagsURL = publicURL + Prefix + n + "/tags/list"
 				break
 			}
 			row.Tags = append(row.Tags, t.Tag)
@@ -426,8 +428,22 @@ func (Format) Rows(c *config.Config, publicURL string, pkgs []*format.Package, t
 	return rows
 }
 
-// registryHost is the host part of public_url, which clients put in front
-// of image names. Registries live at the host root, so a path is dropped.
+// registryURL is the scheme and host of oci.public_url, or of publicURL
+// (server.public_url) when that is not set. Clients find the registry at
+// /v2/ on the host root, so a path is dropped.
+func registryURL(c *config.Config, publicURL string) string {
+	if c != nil && c.OCI != nil && c.OCI.PublicURL != "" {
+		publicURL = c.OCI.PublicURL
+	}
+	u, err := url.Parse(publicURL)
+	if err != nil || u.Host == "" {
+		return strings.TrimRight(publicURL, "/")
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// registryHost is the host part of the registry URL, which clients put
+// in front of image names.
 func registryHost(publicURL string) string {
 	u, err := url.Parse(publicURL)
 	if err != nil || u.Host == "" {

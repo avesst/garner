@@ -33,4 +33,7 @@ rpm:
 
 # Container images: uncomment to make garner a registry at /v2/ as well.
 # The reverse proxy must pass /v2/ to garner (see the README).
-# oci: {}
+# A hostname of its own for the registry keeps image references valid if
+# images later move to another registry.
+# oci:
+#   public_url: https://registry.example.com

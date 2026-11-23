@@ -140,7 +140,9 @@ against GitHub's limit when they carry a token. The metric
 
 ### Container images
 
-With an `oci` section, garner is a registry at `/v2/` on its host. Push
+With an `oci` section, garner is a registry at `/v2/` on the host root of
+`public_url`, or of `oci.public_url` if you give images a hostname of
+their own (see [configuration](docs/configuration.md#oci)). Push
 with a token that has the `upload` scope, its name as the user and its
 secret as the password:
 
@@ -306,7 +308,10 @@ sudo systemctl restart caddy
 With the `oci` section, also pass `/v2/` to garner: image pushes and the
 registry's headers need it. Image pulls then pause while garner restarts;
 under systemd the listening socket stays open, so they wait rather than
-fail.
+fail. The examples serve everything from one hostname at its root. With a
+path in `server.public_url`, `/v2/` still goes at the host root. With
+`oci.public_url` on another hostname, give that hostname its own server
+block that passes `/v2/` to garner the same way.
 
 Caddy:
 

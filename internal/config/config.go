@@ -94,6 +94,10 @@ type RPM struct {
 
 // OCI configures container images (design section 19).
 type OCI struct {
+	// PublicURL is the URL of the registry when it differs from
+	// server.public_url, such as a hostname of its own. Empty uses
+	// server.public_url.
+	PublicURL string `yaml:"public_url"`
 	// Retention is how many untagged manifests are kept per name, besides
 	// tagged ones, for images pushed to garner; 0 keeps all.
 	Retention int `yaml:"retention"`

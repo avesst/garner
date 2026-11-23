@@ -201,6 +201,10 @@ Settled while building:
 - The reverse proxy forwards all of `/v2/` to garner. The snapshot tree
   could be served statically, but no proxy recipe for it is shipped or
   tested.
+- `oci.public_url` gives the registry a hostname of its own, for the
+  token realm and the UI, so image references survive a later move to
+  another registry. Unit-tested only; not tried behind a proxy with two
+  hostnames.
 - `/v2/` serves only published image blobs, plus `HEAD` on blobs a push
   staged; held packages' blobs are not reachable.
 

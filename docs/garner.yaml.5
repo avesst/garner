@@ -116,14 +116,20 @@ Changing it needs a restart.
 .BR public_url " (\fIURL\fR, " required )
 The URL clients use.
 It goes into the apt and dnf client files and the UI, and its
-host is the registry host that image names start with.
+host is the registry host that image names start with, unless
+.B oci.public_url
+is set.
 Must be an absolute
 .B http
 or
 .B https
-URL without a query or fragment.
+URL without credentials, a query or a fragment.
 A path is allowed, for example
-.BR \%https://example.com/garner/ .
+.BR \%https://example.com/garner/ ;
+the registry still sits at
+.I /v2/
+on the host root (see
+.BR OCI ).
 .TP
 .BR client_name " (\fIname\fR, default " garner )
 Prefix of the files clients install:
@@ -323,6 +329,46 @@ Pushes need a token with the
 scope, used with
 .BI "docker login " host " \-u " "token name"
 and the token's secret as the password.
+.PP
+The registry's URL is
+.BR oci.public_url ,
+or else the scheme and host of
+.BR server.public_url .
+A path in
+.B server.public_url
+is dropped, since OCI clients only look for
+.I /v2/
+at the host root: with
+.BR "server.public_url: \%https://example.com/garner/" ,
+images are
+.BI example.com/ name
+and the reverse proxy must pass
+.I example.com/v2/
+to garner as well.
+.TP
+.BR public_url " (\fIURL\fR, default: scheme and host of " server.public_url )
+The registry's URL, when it differs from that default:
+its host is the one image names start with, in the UI's pull commands
+and in the token realm.
+Give the registry a hostname of its own here (for example
+.BR \%https://registry.example.com )
+to move images to another registry later by changing DNS, without
+changing image references.
+The reverse proxy must send that host's
+.I /v2/
+to garner too.
+garner answers
+.I /v2/
+on every host it receives, so references to
+.BR server.public_url 's
+host keep working after this key is added; the reverse proxy decides
+which hostnames serve
+.IR /v2/ .
+Must be an absolute
+.B http
+or
+.B https
+URL without credentials, a path, a query or a fragment.
 .TP
 .BR retention " (\fIinteger\fR, default " 10 )
 Untagged manifests kept per image name, newest first, besides every

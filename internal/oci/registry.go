@@ -159,14 +159,10 @@ const (
 	tokenLifetime  = time.Hour
 )
 
-// realm is the token endpoint at public_url's host, which clients put in
-// front of image names.
+// realm is the token endpoint at the registry's host, which clients put
+// in front of image names.
 func (g *Registry) realm() string {
-	u, err := url.Parse(g.Config().Server.PublicURL)
-	if err != nil {
-		return tokenPath
-	}
-	return u.Scheme + "://" + u.Host + tokenPath
+	return registryURL(g.Config(), g.Config().Server.PublicURL) + tokenPath
 }
 
 // challenge asks for a token, for pushing to repo when it is not "".

@@ -365,6 +365,44 @@ func TestManifestWithMissingLayerIsRefused(t *testing.T) {
 	}
 }
 
+func TestRealmUsesOCIPublicURL(t *testing.T) {
+	f := newFixture(t)
+	f.cfg.OCI.PublicURL = "https://registry.test/"
+	resp, _ := f.doAs("", "", "GET", "/v2/", nil)
+	want := `Bearer realm="https://registry.test/v2/token",service="garner"`
+	if got := resp.Header.Get("WWW-Authenticate"); got != want {
+		t.Errorf("challenge %q, want %q", got, want)
+	}
+}
+
+// The registry is at /v2/ on the host root, so a path in
+// server.public_url never reaches pull commands or tag-list links.
+func TestSummaryAndRowsUseRegistryHost(t *testing.T) {
+	pkgs := []*format.Package{{ID: "1", Name: "team/tool", Version: "sha256:ab"}}
+	var tags []format.Tag
+	for i := range maxTags + 1 {
+		tags = append(tags, format.Tag{Name: "team/tool", Tag: fmt.Sprint("v", i), PackageID: "1"})
+	}
+	for _, tt := range []struct{ name, ociURL, host string }{
+		{"oci.public_url", "https://registry.test/", "registry.test"},
+		{"server.public_url without its path", "", "pkg.test"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.OCI.PublicURL = tt.ociURL
+			sum := Format{}.Summary(cfg, "https://pkg.test/garner", pkgs, tags)
+			if !strings.Contains(sum.Usage, "docker pull "+tt.host+"/<name>") || strings.Contains(sum.Usage, "garner/") {
+				t.Errorf("usage %q", sum.Usage)
+			}
+			rows := Format{}.Rows(cfg, "https://pkg.test/garner", pkgs, tags)
+			if len(rows) != 1 || !strings.HasPrefix(rows[0].Copy, "docker pull "+tt.host+"/team/tool:") ||
+				rows[0].TagsURL != "https://"+tt.host+"/v2/team/tool/tags/list" {
+				t.Errorf("rows %+v", rows)
+			}
+		})
+	}
+}
+
 func TestPingAndAuth(t *testing.T) {
 	f := newFixture(t)
 	resp, _ := f.doAs("", "", "GET", "/v2/", nil)
