@@ -623,8 +623,8 @@ listing does not reach.
   mismatch rejects the asset.
 - `verify: opportunistic` accepts assets without a checksum and marks them
   `unverified`. `verify: required` rejects them.
-- Later: a pinned upstream GPG fingerprint (`gpg_fingerprint`), then Sigstore
-  and GitHub artifact attestations.
+- Later: checking that a release was signed by a signer the source
+  trusts (section 20).
 
 **Approval.** With `approval: manual`, new packages are stored with placement
 state `held` until `garner approve`. The default is `auto` for all source
@@ -977,7 +977,7 @@ There are no download statistics, no login and no write actions.
 - PostgreSQL, multiple nodes and `db migrate` (section 18).
 - S3-compatible storage and `storage migrate`.
 - Webhooks.
-- Upstream GPG fingerprint pinning, then Sigstore and attestations.
+- Upstream signatures: OpenPGP, Sigstore and GitHub attestations (section 20).
 - Stage suites with a `promote` command.
 - OIDC federation for CI and SSO for people.
 - Named and aggregate repositories.
@@ -1414,5 +1414,143 @@ sources:
 - Image upload as an archive (`docker save`, `oci-archive`) through
   `PUT /api/v1/upload`.
 - The referrers API.
-- cosign verification at sync (section 15, Sigstore).
+- cosign verification at sync (section 20).
 - Platform filtering at sync, accepting the changed digest.
+
+## 20. Upstream signatures (later)
+
+Not built yet. Today a synced asset is checked against a checksum (section
+7, Verification), which catches corruption but not a replaced release: whoever
+can change an asset can change its checksum file too. This section designs
+checking that a release was signed by a signer the source trusts. It
+replaces the earlier plan of a `gpg_fingerprint` key followed by separate
+Sigstore and attestation support.
+
+### Background
+
+A release signature takes one of two forms:
+
+- **A pinned key (OpenPGP).** The project signs with a long-lived private
+  key; the verifier trusts its public key, as apt trusts a repository key.
+  Files: `SHA256SUMS.asc`, `tool.deb.asc`, `*.gpg`, binary `*.sig`.
+- **A CI identity (Sigstore, "keyless").** The project's CI job proves its
+  identity to an OIDC issuer (GitHub Actions, GitLab), gets a short-lived
+  Fulcio certificate naming it (repository, workflow, ref) and signs; the
+  signature is recorded in the public Rekor log. The verifier trusts an
+  identity, not a key. Anyone can obtain a Sigstore signature, so the
+  identity must be pinned. Files: `*.sigstore.json` bundles, which carry
+  the certificate and the log proof, so they verify offline.
+
+Either form signs the checksum file (one signature covers every asset in
+it) or each asset. GitHub artifact attestations are Sigstore bundles
+stored by GitHub and looked up by the file's digest, not release assets.
+
+A survey of 14 projects (November 2026, latest release of each): Sigstore
+bundles on the checksum file (goreleaser, cosign, trivy) or on each asset
+(opentelemetry-collector-releases, trivy); OpenPGP on the checksum file
+(syncthing, restic); GitHub attestations only (cli/cli, grafana/alloy) or
+next to the files (goreleaser, cosign, syncthing, trivy); cosign's older
+`.sig` with `.pem` (caddy); checksums only (node_exporter, traefik,
+lazygit, hugo). Two verifiers, OpenPGP and Sigstore, cover all but the
+last two groups.
+
+### Configuration
+
+A source names the signers it trusts, not files:
+
+```yaml
+sources:
+  - name: tool
+    forge: github
+    repo: example/tool
+    signers:
+      - sigstore: {}
+      - pgp: { key_file: /etc/garner/keys/tool.asc }
+```
+
+- `sigstore: {}` trusts a CI workflow of the synced repository, matched on
+  the certificate's OIDC issuer and source repository: on GitHub, issuer
+  `https://token.actions.githubusercontent.com` and repository
+  `https://github.com/<repo>`; on GitLab, the instance URL and the project
+  path. On an `org` or `group` source each repository is its own signer,
+  so one entry covers them all. `gh attestation verify --repo` uses the
+  same default.
+- `sigstore` can narrow or redirect this: `identity`, a glob on the
+  certificate's identity (`https://github.com/example/tool/.github/workflows/release.yml@refs/tags/*`,
+  for one workflow and tags only); `issuer`; and `repository`, for releases
+  built in another repository. A forge without a default issuer
+  (Forgejo) needs `issuer` and `identity` set.
+- `pgp` trusts the keys in `key_file`. A signature counts if it was made
+  while the key was valid; a revocation in the file is honoured.
+- `signers` sits in `defaults` and per source, like `verify`, so the
+  same validation and precedence apply.
+
+### Rule
+
+- A source without `signers` behaves as today.
+- With `signers`, an asset is accepted only if one of these verifies
+  against a listed signer: its own signature; the signature of a checksum
+  file that lists its hash (the asset still has to match that hash); or,
+  on GitHub, an attestation for its digest. Otherwise it is rejected and a
+  `signature` conflict is recorded, whatever `verify` says.
+- A signature that does not verify is treated as absent; it never rejects
+  an asset that another signature accepts. A checksum mismatch still
+  rejects it (section 7).
+- `verify_status` gains `signed`, above `verified` and `unverified`, and
+  the UI and `packages list` show it.
+
+### Discovery
+
+- Only candidate assets and the checksum files that cover them are looked
+  at; other assets are never downloaded.
+- Signature files are found by name next to the file they sign:
+  `<file>.sigstore.json`, `<file>.sigstore`, `<file>.asc`, `<file>.gpg` and
+  `<file>.sig`. A `.sig` is classified by content, since OpenPGP and
+  cosign both use the name. A `signatures:` list of globs, like
+  `checksums:`, replaces the built-in names.
+- On GitHub, with a `sigstore` signer, one attestation lookup per asset
+  digest (`GET /repos/<repo>/attestations/sha256:<hex>`). Lookups count
+  against the API rate limit, so such sources should have a token.
+- A signature file that fails to download is retried like a checksum file
+  (section 7).
+
+### Sigstore trust root
+
+Verifying Sigstore needs the trusted root: Fulcio's certificate
+authorities and the Rekor and timestamp authority keys. By default garner
+keeps it current through Sigstore's TUF repository
+(`tuf-repo-cdn.sigstore.dev`), cached under `storage.path`; a
+`sigstore.trusted_root` file replaces that for hosts without that access,
+and has to be updated by hand when Sigstore rotates keys. Verification
+itself is offline: bundles carry their log proofs, and Rekor is never
+queried during a sync.
+
+### Implementation
+
+- Format-agnostic, in `internal/sync`, next to checksum verification.
+- OpenPGP uses `ProtonMail/go-crypto`, already a dependency.
+- Sigstore uses `github.com/sigstore/sigstore-go` rather than a local
+  implementation: verification spans certificate chains, transparency log
+  proofs and RFC 3161 timestamps, and a missed check accepts forgeries.
+  It is a large module (about 360 modules in its graph) and its v1.4
+  needs Go 1.27; it must be approved before slice 2 (docs/plan.md,
+  Dependencies).
+- Tests use real bundles and signatures as test data, checked against a
+  known digest, so the packages themselves are not needed; each check
+  (identity, issuer, digest, log proof, trust root) is broken once.
+
+### Slices
+
+1. OpenPGP signatures on checksum files and assets; `signers`, the rule,
+   discovery by name, `signed` status.
+2. Sigstore bundles in release assets, and the trust root.
+3. GitHub artifact attestations, reusing slice 2's verifier.
+
+### Not covered
+
+- cosign's older `.sig` with `.pem` output, which carries no log proof and
+  would need a Rekor query during sync.
+- minisign and signify, used by none of the surveyed projects.
+- Signatures embedded in `.rpm` files.
+- cosign signatures on synced OCI images (section 19, Later); they would
+  reuse the Sigstore verifier but are found through the registry.
