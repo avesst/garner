@@ -936,7 +936,7 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 	}
 	defer os.RemoveAll(tmp)
 
-	sums, err := r.checksums(ctx, rel, tmp)
+	sums, err := r.checksums(ctx, rel, cands)
 	if err != nil {
 		var ce *checksumError
 		if errors.As(err, &ce) && permanent(err) {
@@ -1161,12 +1161,33 @@ func (r *run) conflict(kind, repo string, rel forge.Release, assetName, detail s
 	}
 }
 
-// checksums reads the release's checksum files into a map from file name
-// to sha256.
-func (r *run) checksums(ctx context.Context, rel forge.Release, dir string) (map[string]string, error) {
+// checksums reads the checksum files that cands need into a map from file
+// name to sha256.
+func (r *run) checksums(ctx context.Context, rel forge.Release, cands []forge.Asset) (map[string]string, error) {
 	sums := map[string]string{}
+	// The forge's digest wins over checksum files (expected), so only
+	// candidates without one need them.
+	need := map[string]bool{}
+	for _, a := range cands {
+		if a.SHA256 == "" {
+			need[a.Name] = true
+		}
+	}
+	if len(need) == 0 {
+		return sums, nil
+	}
+	assets := map[string]bool{}
+	for _, a := range rel.Assets {
+		assets[a.Name] = true
+	}
 	for _, a := range rel.Assets {
 		if !r.isChecksumFile(a.Name) {
+			continue
+		}
+		// A file named after another asset (tool.deb.sha256) covers only
+		// that asset, so it is read only when that asset needs it. Any
+		// other checksum file may cover several and is always read.
+		if covered := strings.TrimSuffix(a.Name, path.Ext(a.Name)); covered != a.Name && assets[covered] && !need[covered] {
 			continue
 		}
 		body, err := r.client.Download(ctx, a)

@@ -621,6 +621,13 @@ listing does not reach.
   a file holding only a hash applies to the asset named like the file
   without its last extension (`tool.deb.sha256sum` covers `tool.deb`). A
   mismatch rejects the asset.
+- Checksum files are read only for candidates without a forge digest,
+  since the digest wins; when every candidate has one, none is read. A
+  checksum file named after another asset of the release (`tool.deb.sha256`
+  next to `tool.deb`) covers only that asset and is read only when that
+  asset needs it; any other checksum file is always read. Releases can
+  carry hundreds of such files, one for every archive and SBOM, and
+  reading them all exhausts an unauthenticated API rate limit.
 - `verify: opportunistic` accepts assets without a checksum and marks them
   `unverified`. `verify: required` rejects them.
 - Later: checking that a release was signed by a signer the source
@@ -1513,6 +1520,8 @@ sources:
   against the API rate limit, so such sources should have a token.
 - A signature file that fails to download is retried like a checksum file
   (section 7).
+- A signed checksum file is read even when the forge gives digests, unlike
+  an unsigned one (section 7), since its signature is what counts.
 
 ### Sigstore trust root
 

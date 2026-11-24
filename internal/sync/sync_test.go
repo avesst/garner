@@ -597,6 +597,89 @@ func TestSourceChecksumGlobs(t *testing.T) {
 	}
 }
 
+// A per-file checksum file (named after another asset of the release) is
+// downloaded only for a candidate; a shared one is always downloaded. A
+// release like opentelemetry-collector-releases has hundreds of sidecars.
+func TestChecksumSidecarsOnlyForCandidates(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool",
+		Assets: []config.AssetRule{{Match: "tool_*_amd64.deb", Suite: "stable"}}})
+	amd := debtest.Build("tool", "1.0", "amd64", "a")
+	extra := debtest.Build("tool-extra", "1.0", "amd64", "e")
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool_1.0_amd64.deb", amd)
+	f.forge.add(rel, "tool_1.0_amd64.deb.sha256", []byte(sum(amd)+"\n"))
+	f.forge.add(rel, "tool_1.0_amd64.deb.sbom.json", []byte("{}"))
+	f.forge.add(rel, "tool_1.0_amd64.deb.sbom.json.sha256", []byte(strings.Repeat("1", 64)+"\n"))
+	f.forge.add(rel, "tool_1.0_arm64.deb", []byte("not read"))
+	f.forge.add(rel, "tool_1.0_arm64.deb.sha256", []byte(strings.Repeat("2", 64)+"\n"))
+	f.forge.add(rel, "tool_1.0_linux.tar.gz", []byte("not read"))
+	f.forge.add(rel, "tool_1.0_linux.tar.gz.sha256", []byte(strings.Repeat("3", 64)+"\n"))
+	// Named like a sidecar, but no asset "tool-extra_1.0_amd64.deb.all"
+	// exists, so it is a shared file and is read.
+	f.forge.add(rel, "tool_1.0_extra_amd64.deb", extra)
+	f.forge.add(rel, "tool-extra_1.0_amd64.deb.all.sha256",
+		[]byte(sum(extra)+"  tool_1.0_extra_amd64.deb\n"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	got := slices.Clone(f.forge.downloads)
+	slices.Sort(got)
+	want := []string{"tool-extra_1.0_amd64.deb.all.sha256", "tool_1.0_amd64.deb", "tool_1.0_amd64.deb.sha256",
+		"tool_1.0_extra_amd64.deb"}
+	if !slices.Equal(got, want) {
+		t.Errorf("downloaded %q, want %q", got, want)
+	}
+	placed := strings.Join(f.placed(), "; ")
+	for _, w := range []string{"tool 1.0 stable active verified", "tool-extra 1.0 stable active verified"} {
+		if !strings.Contains(placed, w) {
+			t.Errorf("placed %q, want %q", placed, w)
+		}
+	}
+}
+
+// The forge's digest wins over checksum files, so a release whose
+// candidates all have one needs none; in a mixed release only what the
+// others need is read.
+func TestChecksumFilesSkippedForForgeDigests(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
+	a := debtest.Build("tool", "1.0", "amd64", "a")
+	rel := f.release("org/tool", "1", 1)
+	f.forge.add(rel, "tool_1.0_amd64.deb", a)
+	rel.Assets[len(rel.Assets)-1].SHA256 = sum(a)
+	f.forge.add(rel, "tool_1.0_amd64.deb.sha256", []byte(sum(a)+"\n"))
+	f.forge.add(rel, "checksums.txt", []byte(sum(a)+"  tool_1.0_amd64.deb\n"))
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	if got := strings.Join(f.forge.downloads, ","); got != "tool_1.0_amd64.deb" {
+		t.Errorf("downloaded %q, want only the package", got)
+	}
+	if got := strings.Join(f.placed(), "; "); got != "tool 1.0 stable active verified" {
+		t.Errorf("placed %q", got)
+	}
+
+	b := debtest.Build("tool", "2.0", "amd64", "b")
+	c := debtest.Build("tool-extra", "2.0", "amd64", "c")
+	rel2 := f.release("org/tool", "2", 2)
+	f.forge.add(rel2, "tool_2.0_amd64.deb", b)
+	rel2.Assets[len(rel2.Assets)-1].SHA256 = sum(b)
+	f.forge.add(rel2, "tool_2.0_amd64.deb.sha256", []byte(sum(b)+"\n"))
+	f.forge.add(rel2, "tool-extra_2.0_amd64.deb", c)
+	f.forge.add(rel2, "tool-extra_2.0_amd64.deb.sha256", []byte(sum(c)+"\n"))
+	f.forge.downloads = nil
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	got := slices.Clone(f.forge.downloads)
+	slices.Sort(got)
+	if want := []string{"tool-extra_2.0_amd64.deb", "tool-extra_2.0_amd64.deb.sha256", "tool_2.0_amd64.deb"}; !slices.Equal(got, want) {
+		t.Errorf("downloaded %q, want %q", got, want)
+	}
+	if got := strings.Join(f.placed(), "; "); !strings.Contains(got, "tool-extra 2.0 stable active verified") {
+		t.Errorf("placed %q", got)
+	}
+}
+
 // Assets that cannot become packages are not downloaded: no enabled
 // format for their extension (rpm is not registered in the fixture), or
 // no asset rule matching their name. They do not fail the run either.

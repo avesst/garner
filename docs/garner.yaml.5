@@ -589,6 +589,10 @@ They replace the built\-in names
 .BR *_checksums.txt ,
 .BR SHA256SUMS ,
 .BR *.sha256 ).
+Checksum files are downloaded only for package assets without a forge
+digest, and one named after another asset
+.RB ( tool.deb.sha256 )
+only for that asset.
 .TP
 .BR archived " (\fIbool\fR, default " false )
 Also sync archived repositories of an

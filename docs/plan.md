@@ -246,16 +246,31 @@ page. Paging and filtering were checked in headless Chromium (25 of 501
 rows shown); not checked with screen readers. `index.html` grows with
 the number of names, about 150 KB for 500 images.
 
-## First run past releases without candidates (after 0.2.0)
+## Syncing release-heavy repositories (after 0.2.0)
 
-Fixed; design section 7, Release selection. A source's first run took the
-newest release by publish time, and when its assets matched no rule it
-waited for them, so the source never started. This hit
+Fixed; design section 7. Both showed on
 `open-telemetry/opentelemetry-collector-releases`, which publishes
-`cmd/opampsupervisor/vX` seconds after `vX`. The first run now takes the
-newest release with candidate assets. Unit-tested
-(`TestFirstRunSkipsNewerReleaseWithoutCandidates`); not yet run against
-that repository.
+`cmd/opampsupervisor/vX` seconds after `vX` and attaches 204 `*.sha256`
+files to each release.
+
+- A source's first run took the newest release by publish time, and when
+  its assets matched no rule it waited for them, so the source never
+  started. The first run now takes the newest release with candidate
+  assets (`TestFirstRunSkipsNewerReleaseWithoutCandidates`).
+- Every checksum file was downloaded, which exhausted GitHub's
+  unauthenticated limit of 60 requests an hour before any package. Checksum
+  files are now read only for candidates without a forge digest, and one
+  named after another asset only for that asset
+  (`TestChecksumSidecarsOnlyForCandidates`,
+  `TestChecksumFilesSkippedForForgeDigests`).
+
+On 2026-11-24 a local instance synced that repository from github.com,
+unauthenticated, with a deb rule for `otelcol-contrib`: the build before
+the first fix added nothing; with both fixes and no `checksums:` the
+first run placed `otelcol-contrib` 0.165.0, verified by GitHub's digest,
+in 11 API requests. Not checked: rpm (no `createrepo_c` on that host), a
+later run picking up the next release, and the per-asset rule against a
+forge without digests.
 
 ## Decisions to make when their slice arrives
 

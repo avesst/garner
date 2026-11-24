@@ -210,7 +210,7 @@ one image of a registry; see [Registry sources](#registry-sources).
 | `assets` | list of rules | `[]` | Which deb suite or rpm release each asset goes to; see [Asset rules](#asset-rules). |
 | `include` | list of globs | `[]` | For `org` and `group` sources only: sync only repositories whose name (without the owner) matches one of these. Empty means all. |
 | `exclude` | list of globs | `[]` | Skip repositories whose name matches, and skip assets whose file name matches. Matching assets are never downloaded. |
-| `checksums` | list of globs | `[]` | File names of a release's checksum files. They replace the built-in names (`checksums.txt`, `*_checksums.txt`, `SHA256SUMS`, `*.sha256`). |
+| `checksums` | list of globs | `[]` | File names of a release's checksum files. They replace the built-in names (`checksums.txt`, `*_checksums.txt`, `SHA256SUMS`, `*.sha256`). Checksum files are downloaded only for package assets without a forge digest, and one named after another asset (`tool.deb.sha256`) only for that asset. |
 | `archived` | bool | `false` | Also sync archived repositories of an `org` or `group`. |
 | `forks` | bool | `false` | Also sync forks in an `org` or `group`. |
 | `recursive` | bool | `true` | Walk GitLab subgroups. Only valid on GitLab `group` sources. |
