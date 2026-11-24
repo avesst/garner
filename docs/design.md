@@ -526,8 +526,12 @@ listing does not reach.
   A pending release whose package assets were removed is dropped.
   Uploads are not affected.
 - First run of a source (or a newly discovered repo): only the latest
-  published release; with `min_release_age`, the latest that is old
-  enough, after which each newer release follows as it ages. A new gated
+  published release with candidate assets, or the latest if none has
+  any; with `min_release_age`, the latest that is old
+  enough, after which each newer release follows as it ages. A repository
+  that publishes several products as separate releases
+  (`cmd/builder/v1.2.0` next to `v1.2.0`) may list one whose assets match
+  nothing last; starting there would wait for its assets forever. A new gated
   source can therefore publish several recent versions over its first
   days, where an ungated one publishes only the newest; waiting for the
   newest to age instead would publish nothing for a project that releases

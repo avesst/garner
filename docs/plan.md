@@ -246,6 +246,17 @@ page. Paging and filtering were checked in headless Chromium (25 of 501
 rows shown); not checked with screen readers. `index.html` grows with
 the number of names, about 150 KB for 500 images.
 
+## First run past releases without candidates (after 0.2.0)
+
+Fixed; design section 7, Release selection. A source's first run took the
+newest release by publish time, and when its assets matched no rule it
+waited for them, so the source never started. This hit
+`open-telemetry/opentelemetry-collector-releases`, which publishes
+`cmd/opampsupervisor/vX` seconds after `vX`. The first run now takes the
+newest release with candidate assets. Unit-tested
+(`TestFirstRunSkipsNewerReleaseWithoutCandidates`); not yet run against
+that repository.
+
 ## Decisions to make when their slice arrives
 
 | Decision | Needed by | Current recommendation |

@@ -651,8 +651,8 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 		}
 	}
 	var latest string
-	if len(candidates) > 0 {
-		latest = candidates[len(candidates)-1].ID
+	if rel, ok := r.startRelease(candidates); ok {
+		latest = rel.ID
 	}
 	waiting, err := r.deferrable(ctx, repo, young, candidates, seenAny, last, pending)
 	if err != nil {
@@ -736,6 +736,22 @@ func (r *run) syncRepo(ctx context.Context, repo string) (bool, error) {
 		r.state.ETags[key] = etag
 	}
 	return matched || len(candidates) == 0, errors.Join(append(errs, lookupErrs...)...)
+}
+
+// startRelease is the release a first run takes from rels, sorted oldest
+// first: the newest with candidate assets, else the newest. A repository
+// that publishes several products as separate releases can put one whose
+// assets match nothing last; starting there would wait on it forever.
+func (r *run) startRelease(rels []forge.Release) (forge.Release, bool) {
+	for i := len(rels) - 1; i >= 0; i-- {
+		if r.hasCandidates(rels[i]) {
+			return rels[i], true
+		}
+	}
+	if len(rels) == 0 {
+		return forge.Release{}, false
+	}
+	return rels[len(rels)-1], true
 }
 
 // hasCandidates reports whether any of a release's assets could become a
@@ -868,8 +884,8 @@ func (r *run) splitByAge(ctx context.Context, repo string, rels []forge.Release,
 func (r *run) deferrable(ctx context.Context, repo string, young, ready []forge.Release, seenAny bool,
 	last time.Time, pending map[string]bool) ([]forge.Release, error) {
 	from, hasFrom := last, seenAny
-	if !seenAny && len(ready) > 0 {
-		from, hasFrom = ready[len(ready)-1].PublishedAt, true
+	if start, ok := r.startRelease(ready); !seenAny && ok {
+		from, hasFrom = start.PublishedAt, true
 	}
 	var out []forge.Release
 	for _, rel := range young {

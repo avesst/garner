@@ -252,6 +252,41 @@ func TestFirstRunTakesLatestThenNewer(t *testing.T) {
 	}
 }
 
+// A repository that publishes several products as separate releases, like
+// opentelemetry-collector-releases, can put a release whose assets match
+// no rule last. The first run starts from the newest release with
+// candidate assets instead of waiting on that one forever.
+func TestFirstRunSkipsNewerReleaseWithoutCandidates(t *testing.T) {
+	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool",
+		Assets: []config.AssetRule{{Match: "tool_*.deb", Suite: "stable"}}})
+	r1 := f.release("org/tool", "1", 1)
+	f.forge.add(r1, "tool_1.0_amd64.deb", debtest.Build("tool", "1.0", "amd64", "1"))
+	r2 := f.release("org/tool", "2", 2)
+	f.forge.add(r2, "tool_2.0_amd64.deb", debtest.Build("tool", "2.0", "amd64", "2"))
+	other := f.release("org/tool", "other/2", 3)
+	f.forge.add(other, "other_2.0_amd64.deb", debtest.Build("other", "2.0", "amd64", "o2"))
+
+	if st := f.sync(); st.LastError != "" {
+		t.Fatalf("LastError = %q", st.LastError)
+	}
+	if got := strings.Join(f.placed(), "; "); got != "tool 2.0 stable active unverified" {
+		t.Fatalf("first run placed %q, want only tool 2.0", got)
+	}
+
+	r3 := f.release("org/tool", "3", 4)
+	f.forge.add(r3, "tool_3.0_amd64.deb", debtest.Build("tool", "3.0", "amd64", "3"))
+	other3 := f.release("org/tool", "other/3", 5)
+	f.forge.add(other3, "other_3.0_amd64.deb", debtest.Build("other", "3.0", "amd64", "o3"))
+	f.sync()
+	got := strings.Join(f.placed(), "; ")
+	if !strings.Contains(got, "tool 3.0") {
+		t.Errorf("later run placed %q, want tool 3.0", got)
+	}
+	if strings.Contains(got, "other") || strings.Contains(got, "tool 1.0") {
+		t.Errorf("placed %q: an unmatched asset or an old release", got)
+	}
+}
+
 func TestChecksumsAndVerify(t *testing.T) {
 	f := newFixture(t, config.Source{Name: "tool", Repo: "org/tool"})
 	good := debtest.Build("tool", "1.0", "amd64", "good")
