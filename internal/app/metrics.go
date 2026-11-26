@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"io/fs"
+	"maps"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/avesst/garner/internal/store"
@@ -30,7 +32,12 @@ func (a *App) registerMetrics() {
 			}
 		}
 		if cs, err := a.Store.Conflicts(ctx, false); err == nil {
-			emit("garner_conflicts_open", "Open conflicts.", nil, float64(len(cs)))
+			emit("garner_conflicts_open", "Open conflicts: deliveries held for a decision.", nil, float64(len(cs)))
+		}
+		if counts, err := a.Store.ConflictCounts(ctx); err == nil {
+			for _, kind := range slices.Sorted(maps.Keys(counts)) {
+				emit("garner_conflicts_total", "Conflicts recorded, by kind.", map[string]string{"kind": kind}, float64(counts[kind]))
+			}
 		}
 		if snaps, err := a.Store.Snapshots(ctx); err == nil {
 			emit("garner_snapshots", "Snapshots on disk.", nil, float64(len(snaps)))

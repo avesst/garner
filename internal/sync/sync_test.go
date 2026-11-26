@@ -318,9 +318,14 @@ func TestChecksumsAndVerify(t *testing.T) {
 	if strings.Contains(got, "tool-extra") {
 		t.Errorf("an asset with a mismatching checksum was ingested: %s", got)
 	}
-	cs, _ := f.st.Conflicts(context.Background(), false)
-	if len(cs) != 1 || cs[0].Kind != "checksum" {
-		t.Errorf("conflicts = %+v", cs)
+	// A skipped asset is history, not a decision to make: recorded as
+	// resolved, so nothing stays open.
+	cs, _ := f.st.Conflicts(context.Background(), true)
+	if len(cs) != 1 || cs[0].Kind != "checksum" || cs[0].ResolvedAt == "" {
+		t.Errorf("conflicts = %+v, want one resolved checksum conflict", cs)
+	}
+	if open, _ := f.st.Conflicts(context.Background(), false); len(open) != 0 {
+		t.Errorf("open conflicts = %+v, want none", open)
 	}
 }
 
@@ -364,7 +369,7 @@ func TestAssetRulesAndDuplicates(t *testing.T) {
 			t.Errorf("%q should have been skipped: %s", unwanted, got)
 		}
 	}
-	cs, _ := f.st.Conflicts(context.Background(), false)
+	cs, _ := f.st.Conflicts(context.Background(), true)
 	if len(cs) != 2 || cs[0].Kind != "asset-mapping" {
 		t.Errorf("conflicts = %+v, want two asset-mapping conflicts", cs)
 	}
@@ -723,10 +728,10 @@ func (f *fixture) downloadsOf(name string) int {
 	return n
 }
 
-// conflictKinds returns "kind package" for every open conflict.
+// conflictKinds returns "kind package" for every recorded conflict.
 func (f *fixture) conflictKinds() []string {
 	f.t.Helper()
-	cs, err := f.st.Conflicts(context.Background(), false)
+	cs, err := f.st.Conflicts(context.Background(), true)
 	if err != nil {
 		f.t.Fatal(err)
 	}

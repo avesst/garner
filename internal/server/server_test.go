@@ -396,3 +396,95 @@ func TestSyncIgnoreAge(t *testing.T) {
 		t.Errorf("trigger failure: HTTP %d: %s", w.Code, w.Body)
 	}
 }
+
+// Approving or removing a held package decides its ownership conflict, so
+// the conflict is no longer open (and the open count can return to zero).
+func TestApproveAndRemoveResolveOwnershipConflicts(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if w := f.do(http.MethodPut, "/api/v1/upload", "up", debtest.Build("app", "1.0", "amd64", "a"), ""); w.Code != http.StatusOK {
+		t.Fatalf("upload: HTTP %d: %s", w.Code, w.Body)
+	}
+	hold := func(version string) *ingest.Result {
+		t.Helper()
+		res, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("app", version, "amd64", "squat")), ingest.Request{
+			Owner: ingest.SourceOwner("other"), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+			HoldOnOwnerConflict: true,
+		})
+		if err != nil || res.State != store.Held {
+			t.Fatalf("foreign sync of %s = %+v, %v; want held", version, res, err)
+		}
+		return res
+	}
+	open := func() int {
+		t.Helper()
+		cs, err := f.st.Conflicts(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(cs)
+	}
+
+	approved := hold("2.0")
+	if n := open(); n != 1 {
+		t.Fatalf("open conflicts after a hold = %d, want 1", n)
+	}
+	if w := f.do(http.MethodPost, "/api/v1/packages/"+approved.Package.ID+"/approve", "pubadm", nil, ""); w.Code != http.StatusOK {
+		t.Fatalf("approve: HTTP %d: %s", w.Code, w.Body)
+	}
+	if n := open(); n != 0 {
+		t.Errorf("open conflicts after approve = %d, want 0", n)
+	}
+
+	hold("3.0")
+	if n := open(); n != 1 {
+		t.Fatalf("open conflicts after a second hold = %d, want 1", n)
+	}
+	if w := f.do(http.MethodDelete, "/api/v1/packages/app?version=3.0", "adm", nil, ""); w.Code != http.StatusOK {
+		t.Fatalf("remove: HTTP %d: %s", w.Code, w.Body)
+	}
+	if n := open(); n != 0 {
+		t.Errorf("open conflicts after remove = %d, want 0", n)
+	}
+	all, err := f.st.Conflicts(ctx, true)
+	if err != nil || len(all) != 2 {
+		t.Errorf("all conflicts = %+v, %v; want both kept as history", all, err)
+	}
+	// Every kind is counted, from zero, so increase() sees the first one.
+	counts, err := f.st.ConflictCounts(ctx)
+	if err != nil || counts[store.ConflictOwnership] != 2 || len(counts) != len(store.ConflictKinds) {
+		t.Errorf("conflict counts = %v, %v; want 2 ownership and every kind present", counts, err)
+	}
+	if n, ok := counts[store.ConflictChecksum]; !ok || n != 0 {
+		t.Errorf("checksum count = %d, %v; want 0, present", n, ok)
+	}
+}
+
+// Two held deliveries of one version share a conflict reference, so
+// approving one of them must leave the conflict open for the other.
+func TestOwnershipConflictStaysOpenWhileAnotherHoldRemains(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	if w := f.do(http.MethodPut, "/api/v1/upload", "up", debtest.Build("app", "1.0", "amd64", "a"), ""); w.Code != http.StatusOK {
+		t.Fatalf("upload: HTTP %d: %s", w.Code, w.Body)
+	}
+	var first *ingest.Result
+	for _, src := range []string{"other", "third"} {
+		res, err := f.in.Ingest(ctx, bytes.NewReader(debtest.Build("app", "2.0", "amd64", "squat-"+src)), ingest.Request{
+			Owner: ingest.SourceOwner(src), Origin: "source", OriginRef: "x", VerifyStatus: "unverified",
+			HoldOnOwnerConflict: true,
+		})
+		if err != nil || res.State != store.Held {
+			t.Fatalf("delivery from %s = %+v, %v; want held", src, res, err)
+		}
+		if first == nil {
+			first = res
+		}
+	}
+	if w := f.do(http.MethodPost, "/api/v1/packages/"+first.Package.ID+"/approve", "pubadm", nil, ""); w.Code != http.StatusOK {
+		t.Fatalf("approve: HTTP %d: %s", w.Code, w.Body)
+	}
+	if cs, err := f.st.Conflicts(ctx, false); err != nil || len(cs) == 0 {
+		t.Errorf("open conflicts = %v, %v; want the conflict open while the second delivery is held", cs, err)
+	}
+}

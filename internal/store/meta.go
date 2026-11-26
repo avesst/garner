@@ -63,6 +63,20 @@ func (q *Queries) Owners(ctx context.Context) ([]NameOwner, error) {
 	return out, rows.Err()
 }
 
+// Conflict kinds. Only ownership conflicts are recorded open; the others
+// are history (see RecordConflict).
+const (
+	ConflictOwnership    = "ownership"
+	ConflictContent      = "content"
+	ConflictAssetMapping = "asset-mapping"
+	ConflictChecksum     = "checksum"
+	ConflictDownload     = "download"
+)
+
+// ConflictKinds lists every kind, so garner_conflicts_total reports each
+// from zero: increase() needs a sample before the first conflict.
+var ConflictKinds = []string{ConflictOwnership, ConflictContent, ConflictAssetMapping, ConflictChecksum, ConflictDownload}
+
 // Conflict is one recorded conflict.
 type Conflict struct {
 	ID         string `json:"id"`
@@ -87,6 +101,52 @@ func (q *Queries) AddConflict(ctx context.Context, id, kind, ref, detail string)
 	_, err := q.q.ExecContext(ctx, `INSERT INTO conflicts (id, kind, package_ref, detail, created_at)
 		VALUES (?, ?, ?, ?, ?)`, id, kind, ref, detail, Now())
 	return err
+}
+
+// RecordConflict records a conflict that needs no decision, such as an
+// asset sync skipped for good, as already resolved: it is history and an
+// event for garner_conflicts_total, never an open conflict. An identical
+// one recorded before is not recorded again, so a release retried after a
+// transient error does not count twice. Call it in a transaction, so the
+// check and the insert cannot interleave with another run's.
+func (q *Queries) RecordConflict(ctx context.Context, id, kind, ref, detail string) error {
+	var n int
+	if err := q.q.QueryRowContext(ctx, `SELECT count(*) FROM conflicts
+		WHERE kind = ? AND package_ref = ? AND detail = ?`,
+		kind, ref, detail).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	now := Now()
+	_, err := q.q.ExecContext(ctx, `INSERT INTO conflicts (id, kind, package_ref, detail, created_at, resolved_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, id, kind, ref, detail, now, now)
+	return err
+}
+
+// ConflictCounts returns how many conflicts of each kind were ever
+// recorded, with every kind of ConflictKinds present. Conflicts are never
+// deleted, so the counts only grow.
+func (q *Queries) ConflictCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := q.q.QueryContext(ctx, `SELECT kind, count(*) FROM conflicts GROUP BY kind`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for _, k := range ConflictKinds {
+		out[k] = 0
+	}
+	for rows.Next() {
+		var kind string
+		var n int
+		if err := rows.Scan(&kind, &n); err != nil {
+			return nil, err
+		}
+		out[kind] = n
+	}
+	return out, rows.Err()
 }
 
 // ResolveConflicts marks open conflicts about a package reference resolved.

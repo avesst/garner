@@ -942,7 +942,7 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 		if errors.As(err, &ce) && permanent(err) {
 			// The assets cannot be verified: skip the release rather
 			// than retry it on every poll or take them unverified.
-			r.conflict("download", repo, rel, ce.name, err.Error())
+			r.conflict(store.ConflictDownload, repo, rel, ce.name, err.Error())
 			return true, false, err
 		}
 		return true, true, err
@@ -965,13 +965,13 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 			// Retrying cannot help, and would hold up every newer
 			// release of the repository.
 			errs = append(errs, err)
-			r.conflict("download", repo, rel, a.Name, err.Error())
+			r.conflict(store.ConflictDownload, repo, rel, a.Name, err.Error())
 			continue
 		}
 		if want, ok := expected(a, sums); ok {
 			if want != da.sha256 {
 				errs = append(errs, fmt.Errorf("%s: checksum mismatch: got %s, want %s", a.Name, da.sha256, want))
-				r.conflict("checksum", repo, rel, a.Name, "checksum mismatch")
+				r.conflict(store.ConflictChecksum, repo, rel, a.Name, "checksum mismatch")
 				continue
 			}
 			da.verify = "verified"
@@ -1008,7 +1008,7 @@ func (r *run) syncRelease(ctx context.Context, repo string, rel forge.Release) (
 			for _, x := range g {
 				names = append(names, x.Name)
 			}
-			r.conflict("asset-mapping", repo, rel, a.Name, "assets map to the same package and distribution: "+strings.Join(names, ", "))
+			r.conflict(store.ConflictAssetMapping, repo, rel, a.Name, "assets map to the same package and distribution: "+strings.Join(names, ", "))
 			continue
 		}
 		touch()
@@ -1149,7 +1149,7 @@ func (r *run) ingest(ctx context.Context, repo string, rel forge.Release, a *ass
 			return nil
 		}
 		if errors.As(err, &ie) && ie.Kind == ingest.Conflict {
-			r.conflict("content", repo, rel, a.Name, ie.Msg)
+			r.conflict(store.ConflictContent, repo, rel, a.Name, ie.Msg)
 		}
 		return err
 	}
@@ -1162,7 +1162,11 @@ func (r *run) ingest(ctx context.Context, repo string, rel forge.Release, a *ass
 
 func (r *run) conflict(kind, repo string, rel forge.Release, assetName, detail string) {
 	ref := fmt.Sprintf("%s/%s@%s/%s", r.src.Name, repo, rel.Tag, assetName)
-	if err := r.m.Store.AddConflict(context.Background(), id.New(), kind, ref, detail); err != nil {
+	// The asset is skipped for good (its release is marked processed), so
+	// there is nothing to decide: the conflict is history and an event.
+	ctx := context.Background()
+	err := r.m.Store.Tx(ctx, func(q *store.Queries) error { return q.RecordConflict(ctx, id.New(), kind, ref, detail) })
+	if err != nil {
 		r.log.Error("record conflict", "err", err)
 	}
 }

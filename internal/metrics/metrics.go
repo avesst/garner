@@ -60,9 +60,10 @@ func (r *Registry) Gauge(name, help string, labels ...string) *Vec {
 	return r.add(name, help, gauge, labels)
 }
 
-// Collect registers a function that emits gauges at scrape time, for
-// values read from the database or disk. Each name must be emitted by one
-// collector only.
+// Collect registers a function that emits values at scrape time, for
+// values read from the database or disk. They are gauges, except names
+// ending in _total, which are counters by Prometheus convention: totals
+// the database keeps. Each name must be emitted by one collector only.
 func (r *Registry) Collect(fn func(emit func(name, help string, labels map[string]string, value float64))) {
 	r.mu.Lock()
 	r.collector = append(r.collector, fn)
@@ -142,7 +143,11 @@ func (r *Registry) Write(w io.Writer) {
 		})
 	}
 	for _, name := range order {
-		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", name, helps[name], name)
+		typ := "gauge"
+		if strings.HasSuffix(name, "_total") {
+			typ = "counter"
+		}
+		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s %s\n", name, helps[name], name, typ)
 		for _, s := range families[name] {
 			names := make([]string, 0, len(s.labels))
 			for n := range s.labels {

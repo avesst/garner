@@ -228,7 +228,7 @@ func (in *Ingester) Ingest(ctx context.Context, r io.Reader, req Request) (*Resu
 			}
 			state = store.Held
 			res.Conflict = ownerConflict
-			if err := q.AddConflict(ctx, id.New(), "ownership", ref, ownerConflict); err != nil {
+			if err := q.AddConflict(ctx, id.New(), store.ConflictOwnership, ref, ownerConflict); err != nil {
 				return err
 			}
 		}
@@ -422,14 +422,24 @@ func ReservedOwner(cfg *config.Config, fm format.Format, name string) string {
 
 // ref is a human-readable package reference for messages and conflicts.
 func ref(formatName string, p *format.Parsed) string {
-	v := p.Version
-	if p.Release != "" {
-		v += "-" + p.Release
+	return PackageRef(formatName, p.Name, p.Epoch, p.Version, p.Release, p.Arch)
+}
+
+// PackageRef is the reference an ownership conflict about a package is
+// recorded under, so approving or removing the package can resolve it.
+func PackageRef(formatName, name string, epoch int, version, release, arch string) string {
+	v := version
+	if release != "" {
+		v += "-" + release
 	}
-	if p.Epoch != 0 {
-		v = fmt.Sprintf("%d:%s", p.Epoch, v)
+	if epoch != 0 {
+		v = fmt.Sprintf("%d:%s", epoch, v)
 	}
-	return fmt.Sprintf("%s %s %s %s", formatName, p.Name, v, p.Arch)
+	s := fmt.Sprintf("%s %s %s", formatName, name, v)
+	if arch != "" {
+		s += " " + arch
+	}
+	return s
 }
 
 // Resign prepares every package that has a served variant again from its

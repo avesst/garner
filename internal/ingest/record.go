@@ -94,7 +94,8 @@ func (in *Ingester) Record(ctx context.Context, d Delivery) (*Result, error) {
 			}
 			state = store.Held
 			res.Conflict = ownerConflict
-			if err := q.AddConflict(ctx, id.New(), "ownership", ref, ownerConflict); err != nil {
+			cref := PackageRef(fm.Name(), parsed.Name, parsed.Epoch, parsed.Version, parsed.Release, parsed.Arch)
+			if err := q.AddConflict(ctx, id.New(), store.ConflictOwnership, cref, ownerConflict); err != nil {
 				return err
 			}
 		} else if claim != nil {

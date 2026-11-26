@@ -157,6 +157,10 @@ as well.
 .BR "conflicts list" " [" \-\-all ]
 Show open conflicts, or all with
 .BR \-\-all .
+Only ownership conflicts are open, until the held package is approved or
+removed; sync conflicts, such as a checksum mismatch, are listed with
+.B \-\-all
+only.
 Scope:
 .BR publish .
 .TP

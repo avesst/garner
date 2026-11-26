@@ -402,7 +402,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 | `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
 | `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `owner_conflict`, `created_at` | Where a package is published. `owner_conflict` marks a hold whose deliverer did not own the name (section 8). |
 | `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`, the only one in the MVP (section 17). |
-| `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. |
+| `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. Only ownership conflicts are open: a delivery held for a decision, resolved when an approve or remove leaves none of its placements held. The others record an asset sync skipped for good (its release is processed), so they are written resolved, as history; `garner_conflicts_total{kind}` counts every kind as events. Rows are never deleted. |
 | `source_state` | `source` PK, `last_run`, `last_success`, `last_error`, `etags` (TEXT/JSON) | |
 | `source_repos` | `source`, `repo`, `etag`, `last_seen` | Cached org/group listing. |
 | `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
@@ -909,7 +909,8 @@ and in CI after a configuration push.
   - `garner_packages{format,distribution,arch}`
   - `garner_uploads_total{result}`
   - `garner_upload_bytes_total`
-  - `garner_conflicts_open`
+  - `garner_conflicts_open` (ownership holds waiting for a decision)
+  - `garner_conflicts_total{kind}` (every conflict recorded; alert on its increase)
   - `garner_storage_bytes`
   - `garner_snapshots`
   - `garner_signing_key_expiry_days`

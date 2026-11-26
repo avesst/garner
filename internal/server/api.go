@@ -226,6 +226,9 @@ func (s *Server) removePackage(w http.ResponseWriter, r *http.Request) {
 			if _, err := tx.SetState(ctx, p.ID, p.Distribution, store.Removed); err != nil {
 				return err
 			}
+			if err := resolveOwnership(ctx, tx, p); err != nil {
+				return err
+			}
 			pj := packageJSON(p)
 			pj.State = store.Removed
 			removed = append(removed, pj)
@@ -243,6 +246,26 @@ func (s *Server) removePackage(w http.ResponseWriter, r *http.Request) {
 	s.Log.Info("removed packages", "name", r.PathValue("name"), "count", len(removed), "by", tokenFrom(r).Name)
 	s.Scheduler.Request()
 	writeJSON(w, http.StatusOK, removed)
+}
+
+// resolveOwnership resolves the ownership conflict of p, a placement that
+// was held, once nothing it covers is held any more: the admin's decision
+// is made. The conflict's reference names the version, not the file, so it
+// covers every held delivery of that version, from any deliverer.
+func resolveOwnership(ctx context.Context, q *store.Queries, p *format.Package) error {
+	if p.State != store.Held {
+		return nil
+	}
+	held, err := q.Placed(ctx, store.PackageFilter{Format: p.Format, Name: p.Name, States: []string{store.Held}})
+	if err != nil {
+		return err
+	}
+	for _, h := range held {
+		if h.Epoch == p.Epoch && h.Version == p.Version && h.Release == p.Release && h.Arch == p.Arch {
+			return nil
+		}
+	}
+	return q.ResolveConflicts(ctx, ingest.PackageRef(p.Format, p.Name, p.Epoch, p.Version, p.Release, p.Arch))
 }
 
 // errApproveConflict and errApproveNeedsAdmin roll back a refused approve.
@@ -289,6 +312,9 @@ func (s *Server) approve(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if _, err := q.SetState(ctx, p.ID, p.Distribution, store.Active); err != nil {
+				return err
+			}
+			if err := resolveOwnership(ctx, q, p); err != nil {
 				return err
 			}
 		}

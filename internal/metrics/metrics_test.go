@@ -33,3 +33,23 @@ garner_packages{arch="amd64",format="deb"} 3
 		t.Errorf("got:\n%s\nwant:\n%s", b.String(), want)
 	}
 }
+
+// A collected name ending in _total is a total the database keeps, so it
+// is exposed as a counter; other collected values stay gauges.
+func TestCollectedTotalIsCounter(t *testing.T) {
+	r := NewRegistry()
+	r.Collect(func(emit func(string, string, map[string]string, float64)) {
+		emit("garner_conflicts_total", "Conflicts recorded, by kind.", map[string]string{"kind": "checksum"}, 2)
+		emit("garner_conflicts_open", "Open conflicts.", nil, 1)
+	})
+	var b strings.Builder
+	r.Write(&b)
+	for _, want := range []string{
+		"# TYPE garner_conflicts_total counter\ngarner_conflicts_total{kind=\"checksum\"} 2\n",
+		"# TYPE garner_conflicts_open gauge\ngarner_conflicts_open 1\n",
+	} {
+		if !strings.Contains(b.String(), want) {
+			t.Errorf("exposition lacks %q:\n%s", want, b.String())
+		}
+	}
+}
