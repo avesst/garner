@@ -86,3 +86,36 @@ func TestClientKeysInline(t *testing.T) {
 		}
 	}
 }
+
+// A pool file name that does not fit a path component would make every
+// publish fail, so Parse rejects it.
+func TestParsePoolFileNameLimit(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		ok      bool
+	}{
+		// tool_<version>_amd64.deb is the version plus 15 bytes.
+		{"1" + strings.Repeat("0", format.MaxPoolFileName-16), true},
+		{"1" + strings.Repeat("0", format.MaxPoolFileName-15), false},
+		// The epoch is not part of the file name.
+		{"9:1" + strings.Repeat("0", format.MaxPoolFileName-16), true},
+	} {
+		control := strings.Replace(testControl, "Version: 1:1.4.0-1", "Version: "+tc.version, 1)
+		path := filepath.Join(t.TempDir(), "p.deb")
+		if err := os.WriteFile(path, buildDeb(t, debMember{"control.tar", controlTar(t, "./control", control)}), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Format{}.Parse(f)
+		f.Close()
+		if tc.ok && err != nil {
+			t.Errorf("version of %d bytes rejected: %v", len(tc.version), err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "pool file name")) {
+			t.Errorf("version of %d bytes: err = %v, want a pool file name error", len(tc.version), err)
+		}
+	}
+}

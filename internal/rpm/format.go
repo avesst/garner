@@ -76,6 +76,9 @@ func (*Format) Parse(f *os.File) (*format.Parsed, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := format.CheckPoolFileName(poolFile(p.Name, p.Version, p.Release, p.Arch)); err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(metadata{Summary: p.Summary, SourceRPM: p.SourceRPM})
 	if err != nil {
 		return nil, err
@@ -98,8 +101,12 @@ func (*Format) PoolPath(p *format.Package) string {
 	if strings.HasPrefix(p.Name, "lib") && len(p.Name) > 3 {
 		prefix = p.Name[:4]
 	}
-	file := fmt.Sprintf("%s-%s-%s.%s.rpm", p.Name, p.Version, p.Release, p.Arch)
-	return path.Join(prefix, p.ServedSHA256()[:16], file)
+	return path.Join(prefix, p.ServedSHA256()[:16], poolFile(p.Name, p.Version, p.Release, p.Arch))
+}
+
+// poolFile is a package's file name in the pool, as rpmbuild names it.
+func poolFile(name, version, release, arch string) string {
+	return fmt.Sprintf("%s-%s-%s.%s.rpm", name, version, release, arch)
 }
 
 // Prepare re-signs a copy of the package with the repository key using

@@ -66,6 +66,10 @@ func (Format) Parse(f *os.File) (*format.Parsed, error) {
 	if p.Version.Revision != "" {
 		version += "-" + p.Version.Revision
 	}
+	// The name is also a pool directory, but shorter than the file name.
+	if err := format.CheckPoolFileName(poolFile(p.Name, version, p.Arch)); err != nil {
+		return nil, err
+	}
 	return &format.Parsed{
 		Name:     p.Name,
 		Epoch:    int(p.Version.Epoch),
@@ -100,8 +104,13 @@ func (Format) PoolPath(p *format.Package) string {
 	if strings.HasPrefix(p.Name, "lib") && len(p.Name) > 3 {
 		prefix = p.Name[:4]
 	}
-	file := fmt.Sprintf("%s_%s_%s.deb", p.Name, p.Version, p.Arch)
-	return path.Join("main", prefix, p.Name, p.ServedSHA256()[:16], file)
+	return path.Join("main", prefix, p.Name, p.ServedSHA256()[:16], poolFile(p.Name, p.Version, p.Arch))
+}
+
+// poolFile is a package's file name in the pool, built from its control
+// fields with the version's epoch left out.
+func poolFile(name, version, arch string) string {
+	return fmt.Sprintf("%s_%s_%s.deb", name, version, arch)
 }
 
 func (Format) Prepare(context.Context, string, string) (string, error) { return "", nil }

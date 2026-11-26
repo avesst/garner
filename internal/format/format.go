@@ -144,6 +144,23 @@ func DefaultDistribution(ds []string) string {
 	return ""
 }
 
+// MaxPoolFileName bounds the file name a format builds from a package's
+// fields for its pool path. Linux allows 255 bytes per path component, and
+// a pool path that does not fit makes every publish fail, so Parse rejects
+// a package whose name would be longer. The longest in Debian 13 and
+// Ubuntu 24.04 is 127 bytes.
+const MaxPoolFileName = 200
+
+// CheckPoolFileName returns an error when file is longer than
+// MaxPoolFileName.
+func CheckPoolFileName(file string) error {
+	if len(file) > MaxPoolFileName {
+		return fmt.Errorf("pool file name %.40s... is %d bytes, more than %d: shorten the package name or version",
+			file, len(file), MaxPoolFileName)
+	}
+	return nil
+}
+
 // ClientPath is where the client file name for the i-th distribution in
 // ClientOrder is served: the default's at the root, so its URL does not
 // change when distributions are added, the others in ClientsDir.

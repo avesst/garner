@@ -451,6 +451,12 @@ The database never sorts versions.
    - The bytes are almost always an accident, such as ANSI colour codes in
      a generated changelog. A `400` that names the tag tells the uploader
      what to fix, where a stripped package would hide it.
+
+   Both formats: reject a package whose pool file name (section 4) would be
+   longer than 200 bytes. Linux allows 255 bytes per path component, and a
+   pool path that does not fit fails the whole publish, which first creates
+   it. The longest real names are far shorter: 127 bytes across Debian 13
+   and Ubuntu 24.04, 78 in a sample of Fedora 44 and EL 9 and 10.
 3. Reject architectures that are not configured (logged; for sync, also shown
    in status).
 4. Check name ownership (section 8).

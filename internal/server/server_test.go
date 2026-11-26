@@ -141,6 +141,8 @@ func TestUploadStatusCodes(t *testing.T) {
 		{"identical again", "up", "?suite=stable", pkg, http.StatusOK},
 		// apt rejects the whole Packages file over one such field.
 		{"malformed Depends", "up", "", debtest.BuildWith("app", "3.0", "amd64", "a", "Depends: libc6 (>= 2.31\n"), http.StatusBadRequest},
+		// Its pool file would not fit a path component, failing every publish.
+		{"version too long", "up", "", debtest.Build("app", "4."+strings.Repeat("0", 250), "amd64", "a"), http.StatusBadRequest},
 		{"content conflict", "up", "", debtest.Build("app", "1.0", "amd64", "b"), http.StatusConflict},
 		{"owned by another", "other", "", debtest.Build("app", "2.0", "amd64", "a"), http.StatusConflict},
 		{"unknown suite", "up", "?suite=jammy", pkg, http.StatusBadRequest},
