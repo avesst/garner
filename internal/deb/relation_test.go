@@ -113,8 +113,11 @@ func TestRelationFieldsMatchDpkg(t *testing.T) {
 			if err != nil && !errors.As(err, &exit) {
 				t.Fatal(err)
 			}
+			// Not a skip: CI fails on skipped tool tests, which mean a tool
+			// is missing.
 			if err == nil && !tc.ok && strictInNewerDpkg[tc.name] {
-				t.Skipf("this dpkg-deb only warns about %q; dpkg 1.22.22 (Debian 13) and later refuse it\n%s", tc.field, out)
+				t.Logf("this dpkg-deb only warns about %q; dpkg 1.22.22 (Debian 13) and later refuse it\n%s", tc.field, out)
+				return
 			}
 			if dpkgOK := err == nil; dpkgOK != tc.ok {
 				t.Errorf("dpkg-deb accepts %q: %v, the case expects %v\n%s", tc.field, dpkgOK, tc.ok, out)
