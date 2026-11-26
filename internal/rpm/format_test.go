@@ -56,7 +56,7 @@ func TestPoolPathAndClient(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.RPM.Releases = []string{"el10", "stable"}
-	cs := f.Clients(cfg, "https://repo.example.com")
+	cs := f.Clients(cfg, "https://repo.example.com", nil)
 	if len(cs) != 2 {
 		t.Fatalf("got %d client files, want 2", len(cs))
 	}

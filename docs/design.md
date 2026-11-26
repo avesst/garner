@@ -106,8 +106,8 @@ Multiple nodes and separate roles are later extensions (section 18).
 ```
 /                         UI (static per snapshot, live status)
 /key.asc                  public key(s), ASCII-armored
-/key.gpg                  public key(s), binary keyring (for apt Signed-By)
-/garner.sources           generated deb822 client file
+/key.gpg                  public key(s), binary keyring
+/garner.sources           generated deb822 client file, keys inline
 /garner.repo              generated dnf client file
 /deb/dists/<suite>/...    apt metadata (current snapshot)
 /deb/pool/...             deb package files
@@ -157,9 +157,18 @@ Types: deb
 URIs: https://repo.example.com/deb
 Suites: stable
 Components: main
-Architectures: amd64
-Signed-By: /usr/share/keyrings/garner.gpg
+Signed-By:
+ -----BEGIN PGP PUBLIC KEY BLOCK-----
+ .
+ mQINBGk...
+ -----END PGP PUBLIC KEY BLOCK-----
 ```
+
+`Signed-By` carries the configured keys inline (apt 2.4 and later), so a
+client installs this one file and no keyring. A keyring file would need to
+be readable by `_apt`, which verifies signatures, and one downloaded under
+a restrictive umask such as 027 or 077 is not; apt reads the `.sources`
+file as root and passes the keys to its verifier itself.
 
 ### rpm
 
@@ -818,7 +827,8 @@ and in CI after a configuration push.
   key signs.
 - Rotation:
   1. Add the new key second.
-  2. Wait for clients to fetch the keyring.
+  2. Wait for clients to fetch the keyring: apt clients the `.sources`
+     file, which carries the keys; dnf clients `key.asc`.
   3. Move the new key first.
   4. Remove the old key.
 

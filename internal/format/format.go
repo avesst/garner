@@ -187,7 +187,9 @@ type Format interface {
 	// Links are the fixed symlinks in public/ for this format.
 	Links(c *config.Config) []Link
 	// Clients returns one client file per distribution, in ClientOrder.
-	Clients(c *config.Config, publicURL string) []ClientFile
+	// keys is the snapshot's armored public keyring, for a format whose
+	// client file carries the keys; nil when only the paths are needed.
+	Clients(c *config.Config, publicURL string, keys []byte) []ClientFile
 	// Verify checks a rendered snapshot the way a client reads it, from
 	// the signed top-level files down to the package files, against the
 	// packages the snapshot serves (garner verify).

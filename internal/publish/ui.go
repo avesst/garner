@@ -180,7 +180,7 @@ func (p *Publisher) writeRootFiles(dir string, cfg *config.Config, signer signin
 			plain = append(plain, fm)
 			pres := presentation(fm)
 			sec := clientSection{Format: fm.Name(), Label: pres.Label, Tool: pres.Tool, Key: fm.DistributionKey()}
-			for _, cf := range fm.Clients(cfg, data.URL) {
+			for _, cf := range fm.Clients(cfg, data.URL, armored) {
 				if err := fsutil.WriteFile(filepath.Join(dir, filepath.FromSlash(cf.Path)), cf.Content, 0o644); err != nil {
 					return err
 				}

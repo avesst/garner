@@ -113,21 +113,41 @@ func (Format) Links(c *config.Config) []format.Link {
 	}
 }
 
-func (Format) Clients(c *config.Config, publicURL string) []format.ClientFile {
+// Clients returns a deb822 .sources file per suite with the keys inline in
+// Signed-By. apt reads the file as root and hands the keys to its verifier
+// itself, so no keyring file is needed that _apt could fail to read, as one
+// created under umask 027 or 077 would be. apt 2.4 (Ubuntu 22.04), the
+// oldest supported, accepts inline keys.
+func (Format) Clients(c *config.Config, publicURL string, keys []byte) []format.ClientFile {
 	name := c.Server.ClientName
+	signedBy := inlineField(keys)
 	var out []format.ClientFile
 	for i, suite := range format.ClientOrder(c.Deb.Suites) {
 		p := format.ClientPath(i, suite, name+".sources")
-		content := fmt.Sprintf("Types: deb\nURIs: %s/deb\nSuites: %s\nComponents: main\nSigned-By: /usr/share/keyrings/%s.gpg\n",
-			publicURL, suite, name)
-		instr := fmt.Sprintf(`sudo curl -fsSLo /usr/share/keyrings/%[2]s.gpg %[1]s/key.gpg
-sudo curl -fsSLo /etc/apt/sources.list.d/%[2]s.sources %[1]s/%[3]s
+		content := fmt.Sprintf("Types: deb\nURIs: %s/deb\nSuites: %s\nComponents: main\nSigned-By:%s",
+			publicURL, suite, signedBy)
+		instr := fmt.Sprintf(`sudo curl -fsSLo /etc/apt/sources.list.d/%[2]s.sources %[1]s/%[3]s
 sudo apt update`, publicURL, name, p)
 		out = append(out, format.ClientFile{
 			Name: name + ".sources", Path: p, Distribution: suite, Content: []byte(content), Instructions: instr,
 		})
 	}
 	return out
+}
+
+// inlineField formats text as the continuation lines of a deb822 field:
+// each line indented by a space, and an empty line written as " .".
+func inlineField(text []byte) string {
+	var b strings.Builder
+	for _, line := range strings.Split(strings.TrimRight(string(text), "\n"), "\n") {
+		if line == "" {
+			line = "."
+		}
+		b.WriteString("\n ")
+		b.WriteString(line)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // indexFile is one file listed in Release.

@@ -37,7 +37,7 @@ the defaults below.
 |---|---|---|---|
 | `listen` | listen address | `:8080` | Where the HTTP server listens. Changing it needs a restart. |
 | `public_url` | URL, **required** | none | The URL clients use. It goes into the apt and dnf client files and the UI, and its host is the registry host that image names start with, unless `oci.public_url` is set. Must be an absolute `http` or `https` URL without credentials, a query or a fragment. A path is allowed, for example `https://example.com/garner/`; the registry still sits at `/v2/` on the host root (see `oci`). |
-| `client_name` | name | `garner` | Prefix of the files clients install: `<name>.sources`, `<name>.repo`, `/usr/share/keyrings/<name>.gpg`, and the dnf repo ID. Lowercase letters, digits, `.`, `_` and `-`; must start with a letter or digit. |
+| `client_name` | name | `garner` | Prefix of the files clients install: `<name>.sources`, `<name>.repo`, and the dnf repo ID. Lowercase letters, digits, `.`, `_` and `-`; must start with a letter or digit. |
 | `trusted_proxies` | list of IPs or CIDR prefixes | `[]` | Reverse proxies whose `X-Forwarded-*` headers are honoured. Authenticated requests are accepted only from loopback, or from one of these with `X-Forwarded-Proto: https`. Others get `403`. |
 | `allow_insecure_auth` | bool | `false` | Accept authenticated requests over plain HTTP from any address. Tokens then travel unencrypted, so use this only on an isolated lab network. |
 

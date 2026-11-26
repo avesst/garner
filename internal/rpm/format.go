@@ -177,7 +177,7 @@ func (*Format) Links(c *config.Config) []format.Link {
 	return out
 }
 
-func (*Format) Clients(c *config.Config, publicURL string) []format.ClientFile {
+func (*Format) Clients(c *config.Config, publicURL string, _ []byte) []format.ClientFile {
 	name := c.Server.ClientName
 	var out []format.ClientFile
 	for i, rel := range format.ClientOrder(c.RPM.Releases) {

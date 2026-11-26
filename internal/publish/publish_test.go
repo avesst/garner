@@ -758,13 +758,15 @@ func TestClientFilePerSuite(t *testing.T) {
 		t.Errorf("garner.sources:\n%s", src)
 	}
 	src := f.read(t, "clients/testing/garner.sources")
-	if !strings.Contains(src, "Suites: testing\n") || !strings.Contains(src, "Signed-By: /usr/share/keyrings/garner.gpg\n") {
+	// The keys are inline in Signed-By, as key.asc holds them.
+	keyLine := strings.SplitN(f.read(t, "key.asc"), "\n", 2)[0]
+	if !strings.Contains(src, "Suites: testing\n") || !strings.Contains(src, "Signed-By:\n "+keyLine+"\n") {
 		t.Errorf("clients/testing/garner.sources:\n%s", src)
 	}
 	page := f.read(t, "index.html")
 	for _, want := range []string{
 		`data-dist="stable"`, `data-dist="testing"`, `<h4>stable (default)</h4>`,
-		"/etc/apt/sources.list.d/garner.sources http://repo.test/clients/testing/garner.sources",
+		"sudo curl -fsSLo /etc/apt/sources.list.d/garner.sources http://repo.test/clients/testing/garner.sources",
 		`<a href="clients/testing/garner.sources">garner.sources</a>`,
 	} {
 		if !strings.Contains(page, want) {

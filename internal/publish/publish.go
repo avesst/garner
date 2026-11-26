@@ -534,7 +534,7 @@ func (p *Publisher) rootFiles(cfg *config.Config) []string {
 	files := []string{"index.html", "key.asc", "key.gpg"}
 	for _, fm := range p.Formats.All() {
 		// Variants are linked once, as their top directory (ClientsDir).
-		for _, cf := range fm.Clients(cfg, publicURL(cfg)) {
+		for _, cf := range fm.Clients(cfg, publicURL(cfg), nil) {
 			if top, _, _ := strings.Cut(cf.Path, "/"); !slices.Contains(files, top) {
 				files = append(files, top)
 			}

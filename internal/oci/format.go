@@ -82,7 +82,7 @@ func (Format) Links(*config.Config) []format.Link {
 	return []format.Link{{Path: "v2", Target: "current/oci/v2"}}
 }
 
-func (Format) Clients(*config.Config, string) []format.ClientFile { return nil }
+func (Format) Clients(*config.Config, string, []byte) []format.ClientFile { return nil }
 
 // meta decodes a package's metadata.
 func meta(p *format.Package) (Metadata, error) {
