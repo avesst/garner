@@ -22,9 +22,13 @@ import (
 // memory or disk. Real control archives are far smaller: md5sums of a
 // large package is a few MiB.
 const (
-	maxControlTar  = 256 << 20 // decompressed control.tar
-	maxControlFile = 1 << 20   // the control file itself
-	maxMemberName  = 4096      // a control.tar member name, PATH_MAX
+	maxControlTar = 256 << 20 // decompressed control.tar
+	// The control file itself. It becomes a stanza of Packages with some
+	// 300 bytes added, and apt cannot parse a stanza of about 1 MiB, which
+	// would break apt for every client of the suite. The largest stanza in
+	// Debian 13 and Ubuntu 24.04 is 76 KB.
+	maxControlFile = 512 << 10
+	maxMemberName  = 4096 // a control.tar member name, PATH_MAX
 	maxZstdWindow  = 64 << 20
 )
 

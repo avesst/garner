@@ -476,3 +476,28 @@ func compress(t testing.TB, suffix string, data []byte) []byte {
 	}
 	return b.Bytes()
 }
+
+// A control file at the limit is read; one byte more is refused, so the
+// Packages stanza it becomes stays well below what apt can parse.
+func TestReadControlFileLimit(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		ok   bool
+	}{
+		{maxControlFile, true},
+		{maxControlFile + 1, false},
+	} {
+		pad := tc.size - len(testControl) - len("X-Pad: \n")
+		control := testControl + "X-Pad: " + strings.Repeat("a", pad) + "\n"
+		if len(control) != tc.size {
+			t.Fatalf("built a %d-byte control file, want %d", len(control), tc.size)
+		}
+		_, err := Read(bytes.NewReader(buildDeb(t, debMember{"control.tar", controlTar(t, "./control", control)})))
+		if tc.ok && err != nil {
+			t.Errorf("%d-byte control file rejected: %v", tc.size, err)
+		}
+		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "control file is")) {
+			t.Errorf("%d-byte control file: err = %v, want the size limit", tc.size, err)
+		}
+	}
+}
