@@ -103,7 +103,9 @@ func (*Format) PoolPath(p *format.Package) string {
 }
 
 // Prepare re-signs a copy of the package with the repository key using
-// rpmsign, which replaces any existing signature (section 10).
+// rpmsign --resign, which replaces any existing signature (section 10).
+// --addsign does the same in upstream rpm 4.x, but adds a signature in
+// rpm 6 and fails on a signed package in EL 10's rpm 4.19.
 func (f *Format) Prepare(ctx context.Context, original, tmpDir string) (string, error) {
 	exp, ok := f.Signer().(signing.KeyExporter)
 	if !ok {
@@ -131,7 +133,7 @@ func (f *Format) Prepare(ctx context.Context, original, tmpDir string) (string, 
 	if err := copyFile(original, signed); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, f.rpmsign, "--addsign",
+	cmd := exec.CommandContext(ctx, f.rpmsign, "--resign",
 		"--define", "_gpg_name "+f.Signer().Fingerprint(),
 		"--define", "_gpg_path "+home,
 		"--define", "__gpg "+f.gpg,

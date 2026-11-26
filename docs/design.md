@@ -810,9 +810,11 @@ and in CI after a configuration push.
   their originals. garner compares the signing key with the one recorded
   after the last re-sign at every start and reload, so a promotion takes
   effect through a restart too, and an interrupted re-sign is redone.
-- rpm packages are re-signed with `rpmsign --addsign` (the container image
-  ships `rpm-sign`). The original blob is kept, so packages can be re-signed
-  after key rotation. Upstream checksums are verified before re-signing.
+- rpm packages are re-signed with `rpmsign --resign` (the container image
+  ships `rpm-sign`), which replaces a vendor's signature; `--addsign` keeps
+  or refuses it on rpm 6 and EL 10. The original blob is kept, so packages
+  can be re-signed after key rotation. Upstream checksums are verified
+  before re-signing.
 - deb packages are not signed individually. apt verifies the
   `InRelease` -> `Packages` -> sha256 chain.
 - Signing goes through a `Signer` interface so HSM/KMS backends can be added.

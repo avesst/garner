@@ -54,25 +54,79 @@ func TestPrepareSignsWithSubkeyExport(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Prepare: %v", err)
 			}
-
-			dbpath := filepath.Join(dir, "rpmdb")
-			armored, _, err := k.PublicKeys()
-			if err != nil {
-				t.Fatal(err)
-			}
-			pubAsc := filepath.Join(dir, "pub.asc")
-			if err := os.WriteFile(pubAsc, armored, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if out, err := exec.Command(tools["rpmkeys"], "--dbpath", dbpath, "--import", pubAsc).CombinedOutput(); err != nil {
-				t.Fatalf("rpmkeys --import: %v\n%s", err, out)
-			}
-			out, err := exec.Command(tools["rpmkeys"], "--dbpath", dbpath, "--checksig", "-v", signed).CombinedOutput()
-			if err != nil || !signatureOK(string(out)) {
+			if out, err := checksig(t, tools["rpmkeys"], k, signed); err != nil || !signatureOK(out) {
 				t.Errorf("rpmkeys --checksig: %v\n%s", err, out)
 			}
 		})
 	}
+}
+
+// An rpm its vendor already signed must come out with garner's signature
+// only, so a client that trusts only garner's key accepts it. rpmsign
+// --addsign keeps or refuses the vendor's signature on rpm 6 and EL 10.
+func TestPrepareReplacesUpstreamSignature(t *testing.T) {
+	tools := map[string]string{}
+	for _, name := range []string{"rpmsign", "rpmkeys", "gpg", "gpgconf"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not installed", name)
+		}
+		tools[name] = p
+	}
+	dir := t.TempDir()
+	key := func(name string) *signing.Keyring {
+		path := filepath.Join(dir, name+".asc")
+		if _, err := signing.GenerateBits(path, name, name+"@example.com", 2048); err != nil {
+			t.Fatal(err)
+		}
+		k, err := signing.Load([]signing.KeySource{{KeyFile: path}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	prepare := func(k *signing.Keyring, in, name string) string {
+		f := &Format{Signer: func() signing.Signer { return k },
+			rpmsign: tools["rpmsign"], gpg: tools["gpg"], gpgconf: tools["gpgconf"]}
+		tmp := filepath.Join(dir, name)
+		if err := os.Mkdir(tmp, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		out, err := f.Prepare(context.Background(), in, tmp)
+		if err != nil {
+			t.Fatalf("Prepare with the %s key: %v", name, err)
+		}
+		return out
+	}
+	vendor, garner := key("vendor"), key("garner")
+	vendorSigned := prepare(vendor, filepath.Join("testdata", "garner-hello-1.0-1.noarch.rpm"), "vendor")
+	served := prepare(garner, vendorSigned, "garner")
+
+	out, err := checksig(t, tools["rpmkeys"], garner, served)
+	if err != nil || !signatureOK(out) || strings.Contains(out, "NOKEY") {
+		t.Errorf("a client with only garner's key does not accept the re-signed rpm: %v\n%s", err, out)
+	}
+}
+
+// checksig runs rpmkeys --checksig -v on file with only k's public keys
+// imported, and returns its output.
+func checksig(t *testing.T, rpmkeys string, k *signing.Keyring, file string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	armored, _, err := k.PublicKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := filepath.Join(dir, "pub.asc")
+	if err := os.WriteFile(pub, armored, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "rpmdb")
+	if out, err := exec.Command(rpmkeys, "--dbpath", db, "--import", pub).CombinedOutput(); err != nil {
+		t.Fatalf("rpmkeys --import: %v\n%s", err, out)
+	}
+	out, err := exec.Command(rpmkeys, "--dbpath", db, "--checksig", "-v", file).CombinedOutput()
+	return string(out), err
 }
 
 // signatureOK reports whether rpmkeys -v found a signature that verified.
