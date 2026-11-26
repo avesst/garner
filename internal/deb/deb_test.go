@@ -272,11 +272,13 @@ func TestReadManyDeepMemberNames(t *testing.T) {
 
 func TestReadReplaces(t *testing.T) {
 	control := strings.Replace(testControl, "Installed-Size: 12\n",
-		"Installed-Size: 12\nReplaces: old-tool (<< 1.4), tool-data:any,\n tool-doc [amd64], old-tool\n", 1)
+		"Installed-Size: 12\nReplaces: old-tool (<< 1.4), tool-data:any,\n Tool-Doc, old-tool\n", 1)
 	p, err := Read(bytes.NewReader(buildDeb(t, debMember{"control.tar", controlTar(t, "./control", control)})))
 	if err != nil {
 		t.Fatal(err)
 	}
+	// dpkg compares names without regard to case, so ownership is checked
+	// on the lower-cased name.
 	if want := []string{"old-tool", "tool-data", "tool-doc"}; !slices.Equal(p.Replaces, want) {
 		t.Errorf("Replaces = %q, want %q", p.Replaces, want)
 	}

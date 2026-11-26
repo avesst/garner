@@ -419,7 +419,12 @@ The database never sorts versions.
 
 1. Store the file as a blob (fsync, then rename into place).
 2. Detect the format from content, not the file name. Parse name, version and
-   architecture from package metadata.
+   architecture from package metadata. deb: also parse every relationship
+   field apt reads (`Depends`, `Pre-Depends`, `Recommends`, `Suggests`,
+   `Enhances`, `Breaks`, `Conflicts`, `Replaces`, `Provides`) with dpkg's
+   grammar, and reject the package if one does not parse: apt rejects the
+   whole `Packages` file over one such field, which would break every client
+   of the suite.
 3. Reject architectures that are not configured (logged; for sync, also shown
    in status).
 4. Check name ownership (section 8).
@@ -646,7 +651,8 @@ when another file of the same version is already in the distribution.
   rotating tokens keeps ownership.
 - First delivery of an unowned name assigns ownership.
 - A package also needs the names it replaces on clients: deb `Replaces` and
-  rpm `Obsoletes`. They are checked like the package's own name, and a free
+  rpm `Obsoletes`. They are checked like the package's own name (deb names
+  in lower case, since dpkg compares them without regard to case), and a free
   one is assigned to the uploader. A name of another owner gives the same
   `409` or held state as an upload of that name. This keeps an owner of
   `a` from shipping `Obsoletes: b`, which dnf would apply on a plain
