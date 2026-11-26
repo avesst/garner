@@ -84,6 +84,11 @@ func TestRelationFields(t *testing.T) {
 	}
 }
 
+// strictInNewerDpkg are cases garner rejects that dpkg before 1.22.22
+// (Debian 12, Ubuntu 22.04 and 24.04) builds and installs with a warning,
+// and that Debian 13's and later dpkg refuse to build or install.
+var strictInNewerDpkg = map[string]bool{"provides not exact": true}
+
 // TestRelationFieldsMatchDpkg builds each case with dpkg-deb, which
 // parses relationship fields with dpkg's own parser, and checks that
 // garner accepts exactly what dpkg accepts.
@@ -107,6 +112,9 @@ func TestRelationFieldsMatchDpkg(t *testing.T) {
 			var exit *exec.ExitError
 			if err != nil && !errors.As(err, &exit) {
 				t.Fatal(err)
+			}
+			if err == nil && !tc.ok && strictInNewerDpkg[tc.name] {
+				t.Skipf("this dpkg-deb only warns about %q; dpkg 1.22.22 (Debian 13) and later refuse it\n%s", tc.field, out)
 			}
 			if dpkgOK := err == nil; dpkgOK != tc.ok {
 				t.Errorf("dpkg-deb accepts %q: %v, the case expects %v\n%s", tc.field, dpkgOK, tc.ok, out)
