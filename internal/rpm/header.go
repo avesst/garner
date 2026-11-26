@@ -132,6 +132,64 @@ func ReadHeader(r io.Reader) (*Package, error) {
 	return p, nil
 }
 
+// textCheck rejects control characters in the text of a main header.
+// createrepo_c copies summaries, descriptions, changelogs, file names,
+// dependencies and the like into the repodata XML, where bytes below 0x20
+// other than tab, LF and CR are not allowed. createrepo_c 1.1.2 (EL 10)
+// and 1.2.0 (Debian 13) then fail the whole repository, so one such
+// package would stop every publish. garner rejects the package rather
+// than strip the bytes (design section 7).
+type textCheck struct {
+	data    []byte
+	scanned int
+}
+
+// textTagNames name the tags a control character most likely sits in.
+var textTagNames = map[int32]string{
+	1004: "summary", 1005: "description", 1011: "vendor", 1014: "license",
+	1015: "packager", 1016: "group", 1020: "url", 1081: "changelog name",
+	1082: "changelog text",
+}
+
+func (c *textCheck) entry(tag int32, typ, off, count uint32) error {
+	switch typ {
+	case typeString:
+		count = 1
+	case typeStringArray, typeI18NString:
+	default:
+		return nil
+	}
+	name := textTagNames[tag]
+	if name == "" {
+		name = fmt.Sprintf("tag %d", tag)
+	}
+	if uint64(off) >= uint64(len(c.data)) || uint64(count) > uint64(len(c.data))-uint64(off) {
+		return fmt.Errorf("%s: offset or count out of range", name)
+	}
+	rest := c.data[off:]
+	for range count {
+		end := bytes.IndexByte(rest, 0)
+		if end < 0 {
+			return fmt.Errorf("%s: unterminated string", name)
+		}
+		for _, b := range rest[:end] {
+			if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+				return fmt.Errorf("%s: control character 0x%02x is not allowed in rpm metadata", name, b)
+			}
+		}
+		rest = rest[end+1:]
+		c.scanned += end + 1
+	}
+	// rpm writes each entry's data once, though real headers can be
+	// almost all text (libperf in EL 10: 99.96%). Entries that share data
+	// could make this scan quadratic, so text beyond twice the data is
+	// refused.
+	if c.scanned > 2*len(c.data) {
+		return errors.New("header strings overlap")
+	}
+	return nil
+}
+
 type tagValues map[int32]any
 
 func (t tagValues) str(tag int32) string {
@@ -176,12 +234,16 @@ func readHeader(r io.Reader, decode bool) (int, tagValues, error) {
 	data := body[nindex*16:]
 	tags := tagValues{}
 	shapes := map[int32][2]uint32{} // type and count
+	text := textCheck{data: data}
 	for i := uint32(0); i < nindex; i++ {
 		e := body[i*16 : i*16+16]
 		tag := int32(binary.BigEndian.Uint32(e[0:4]))
 		typ := binary.BigEndian.Uint32(e[4:8])
 		off := binary.BigEndian.Uint32(e[8:12])
 		count := binary.BigEndian.Uint32(e[12:16])
+		if err := text.entry(tag, typ, off, count); err != nil {
+			return 0, nil, err
+		}
 		switch tag {
 		case tagName, tagVersion, tagRelease, tagEpoch, tagSummary, tagArch, tagSourceRPM, tagObsoletes:
 		default:

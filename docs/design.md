@@ -424,7 +424,24 @@ The database never sorts versions.
    `Enhances`, `Breaks`, `Conflicts`, `Replaces`, `Provides`) with dpkg's
    grammar, and reject the package if one does not parse: apt rejects the
    whole `Packages` file over one such field, which would break every client
-   of the suite.
+   of the suite. rpm: reject a package whose header text holds a byte below
+   0x20 other than tab, LF and CR. createrepo_c copies summaries,
+   descriptions, changelogs, file names and dependencies into the repodata
+   XML, which forbids those bytes, and createrepo_c 1.1.2 (EL 10) and 1.2.0
+   (Debian 13) then fail the whole repository: one such package would stop
+   every publish, in every format.
+
+   garner rejects such an rpm rather than strip the bytes:
+
+   - Stripping means rewriting the rpm header (the string data, every
+     offset after it and the immutable region), and serving a header that
+     no upstream built and whose checksums garner verified on another file.
+   - createrepo_c versions disagree on these bytes: 1.2.6 (Fedora 44)
+     replaces them with U+FFFD, the others fail. Relying on that would make
+     the outcome depend on the host.
+   - The bytes are almost always an accident, such as ANSI colour codes in
+     a generated changelog. A `400` that names the tag tells the uploader
+     what to fix, where a stripped package would hide it.
 3. Reject architectures that are not configured (logged; for sync, also shown
    in status).
 4. Check name ownership (section 8).

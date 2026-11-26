@@ -216,7 +216,8 @@ func fakeRPM(tags map[int32]string) []byte {
 }
 
 // fakeEntry is one main-header index entry with a single value: a string,
-// or for typeInt32 a decimal number.
+// or for typeInt32 a decimal number. A string array's value holds its
+// strings separated by NUL.
 type fakeEntry struct {
 	tag   int32
 	typ   uint32
@@ -248,7 +249,11 @@ func fakeRPMEntries(entries []fakeEntry) []byte {
 		index = binary.BigEndian.AppendUint32(index, uint32(e.tag))
 		index = binary.BigEndian.AppendUint32(index, e.typ)
 		index = binary.BigEndian.AppendUint32(index, uint32(len(data)))
-		index = binary.BigEndian.AppendUint32(index, 1)
+		count := uint32(1)
+		if e.typ == typeStringArray || e.typ == typeI18NString {
+			count += uint32(strings.Count(e.value, "\x00"))
+		}
+		index = binary.BigEndian.AppendUint32(index, count)
 		if e.typ == typeInt32 {
 			n, err := strconv.ParseInt(e.value, 10, 32)
 			if err != nil {
@@ -345,5 +350,85 @@ func TestReadHeaderManyObsoletes(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("reading %d obsoletes took %v", maxObsoletes, d)
+	}
+}
+
+// createrepo_c fails the whole repository over a control character in
+// any text it writes to repodata, so ReadHeader rejects them all.
+func TestReadHeaderControlCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry fakeEntry
+		want  string // empty: accepted
+	}{
+		{"escape in summary", fakeEntry{tagSummary, typeString, "colour \x1b[32mgreen"}, "summary: control character 0x1b"},
+		{"escape in i18n summary", fakeEntry{tagSummary, typeI18NString, "bell\x07"}, "summary: control character 0x07"},
+		{"escape in description", fakeEntry{1005, typeString, "a\x01b"}, "description: control character 0x01"},
+		{"second changelog entry", fakeEntry{1082, typeStringArray, "- fine\x00- \x1b[1mbold"}, "changelog text: control character 0x1b"},
+		{"unnamed tag", fakeEntry{5000, typeString, "x\x1fy"}, "tag 5000: control character 0x1f"},
+		{"file name", fakeEntry{1117, typeStringArray, "ok\x00bad\nname\x00tab\tok"}, ""},
+		{"tab, LF and CR", fakeEntry{1005, typeString, "line one\r\n\tline two\n"}, ""},
+		{"DEL and UTF-8", fakeEntry{1005, typeString, "café \x7f"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []fakeEntry{
+				{tagName, typeString, "foo"},
+				{tagVersion, typeString, "1.0"},
+				{tagRelease, typeString, "1"},
+				{tagArch, typeString, "noarch"},
+				{tagSourceRPM, typeString, "foo-1.0-1.src.rpm"},
+			}
+			replaced := false
+			for i := range entries {
+				if entries[i].tag == tt.entry.tag {
+					entries[i], replaced = tt.entry, true
+				}
+			}
+			if !replaced {
+				entries = append(entries, tt.entry)
+			}
+			_, err := ReadHeader(bytes.NewReader(fakeRPMEntries(entries)))
+			if tt.want == "" && err != nil {
+				t.Fatalf("rejected: %v", err)
+			}
+			if tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+				t.Errorf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// Index entries that all point at one long string must not make the text
+// check scan it once per entry.
+func TestReadHeaderOverlappingStrings(t *testing.T) {
+	const entries = 200_000
+	str := append(bytes.Repeat([]byte("a"), 64<<10), 0)
+	var index []byte
+	for i := range entries {
+		index = binary.BigEndian.AppendUint32(index, uint32(5000+i))
+		index = binary.BigEndian.AppendUint32(index, typeString)
+		index = binary.BigEndian.AppendUint32(index, 0)
+		index = binary.BigEndian.AppendUint32(index, 1)
+	}
+	var b bytes.Buffer
+	lead := make([]byte, 96)
+	copy(lead, leadMagic)
+	b.Write(lead)
+	b.Write(headerMagic)
+	b.Write(make([]byte, 12)) // empty signature header
+	b.Write(headerMagic)
+	b.Write(make([]byte, 4))
+	binary.Write(&b, binary.BigEndian, uint32(entries))
+	binary.Write(&b, binary.BigEndian, uint32(len(str)))
+	b.Write(index)
+	b.Write(str)
+	start := time.Now()
+	_, err := ReadHeader(bytes.NewReader(b.Bytes()))
+	if err == nil || !strings.Contains(err.Error(), "overlap") {
+		t.Errorf("err = %v, want it to mention the overlap", err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v", d)
 	}
 }
