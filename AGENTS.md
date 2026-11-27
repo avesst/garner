@@ -2,8 +2,8 @@
 
 garner is an internal repository for packages and container images:
 signed apt and dnf repositories and an OCI registry, filled from uploads,
-pushes and releases synced from forges and registries. `README.md` covers what it does, `docs/design.md` is the spec,
-and `docs/plan.md` tracks what is built and what is not yet verified.
+pushes and releases synced from forges and registries. `README.md` covers what it does, `docs/dev/design.md` is the spec,
+and `docs/dev/plan.md` tracks what is built and what is not yet verified.
 
 ## Checks
 
@@ -19,7 +19,7 @@ and `docs/plan.md` tracks what is built and what is not yet verified.
 
 ## Design constraints
 
-These come from `docs/design.md` sections 17 and 18, which explain them.
+These come from `docs/dev/design.md` sections 17 and 18, which explain them.
 
 - The core is format-agnostic: deb and rpm sit behind one format interface,
   and code outside `internal/deb` and `internal/rpm` never branches on a
@@ -36,11 +36,11 @@ These come from `docs/design.md` sections 17 and 18, which explain them.
 A change to configuration keys updates, together:
 
 - `internal/config` (types and validation),
-- `docs/configuration.md` and the `docs/garner.yaml.5` man page,
+- `docs/reference/configuration.md` and the `docs/garner.yaml.5` man page,
 - `contrib/garner.yaml` when the key belongs in a new installation's file.
 
 A change to commands or flags updates `docs/garner.1`. When a slice lands
-or an item gets verified, update `docs/plan.md`.
+or an item gets verified, update `docs/dev/plan.md`.
 
 ## Releases
 
@@ -49,7 +49,7 @@ before the tag; the release workflow publishes that file as the GitHub
 release's notes. Write them for the people who run garner: what changed
 for them since the previous release (features, behaviour and breaking
 changes, in a line each), in prose and short lists, not a list of
-commits. Draft them from `git log <previous tag>..` and `docs/plan.md`.
+commits. Draft them from `git log <previous tag>..` and `docs/dev/plan.md`.
 Keep each paragraph on one line: GitHub shows line breaks in release
 notes as they are. `docs/releases/v0.1.0.md` shows the tone.
 
@@ -57,4 +57,4 @@ notes as they are. `docs/releases/v0.1.0.md` shows the tone.
 
 Ask before adding a Go module. The project prefers a local implementation
 for small needs (ULIDs, Prometheus text format and the forge clients are
-local); approved modules are listed in `docs/plan.md`.
+local); approved modules are listed in `docs/dev/plan.md`.

@@ -292,7 +292,7 @@ A single YAML file holds human decisions. The database holds state.
   working tree) is shown in the UI and in `/api/v1/status`.
 - The CLI never modifies anything the file defines.
 
-[configuration.md](configuration.md) lists every key with its default and
+[configuration.md](../reference/configuration.md) lists every key with its default and
 validation rules.
 
 ### Example
@@ -1238,7 +1238,7 @@ is stopped, a proxy serving `public/` from disk keeps serving it.
 
 ## 19. OCI images (after 0.1.0)
 
-Built in 0.2.0 (`internal/oci`); `docs/plan.md` records what is
+Built in 0.2.0 (`internal/oci`); `docs/dev/plan.md` records what is
 verified. garner stores container images (OCI and Docker schema 2
 manifests and indexes), accepts them by `docker push` and `podman push`,
 syncs selected images from other registries, and serves pulls from the
@@ -1650,7 +1650,7 @@ queried during a sync.
   implementation: verification spans certificate chains, transparency log
   proofs and RFC 3161 timestamps, and a missed check accepts forgeries.
   It is a large module (about 360 modules in its graph) and its v1.4
-  needs Go 1.27; it must be approved before slice 2 (docs/plan.md,
+  needs Go 1.27; it must be approved before slice 2 (docs/dev/plan.md,
   Dependencies).
 - Tests use real bundles and signatures as test data, checked against a
   known digest, so the packages themselves are not needed; each check

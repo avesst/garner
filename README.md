@@ -142,7 +142,7 @@ against GitHub's limit when they carry a token. The metric
 
 With an `oci` section, garner is a registry at `/v2/` on the host root of
 `public_url`, or of `oci.public_url` if you give images a hostname of
-their own (see [configuration](docs/configuration.md#oci)). Push
+their own (see [configuration](docs/reference/configuration.md#oci)). Push
 with a token that has the `upload` scope, its name as the user and its
 secret as the password:
 
@@ -387,4 +387,4 @@ repository. Install the fixed package from GitHub as described above.
 ## Documentation
 
 See the man pages `garner(1)` and `garner.yaml(5)`, installed with the
-package, and the [`docs/`](docs/) directory.
+package, and the [`docs/`](docs) directory.
