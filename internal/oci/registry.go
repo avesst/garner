@@ -601,8 +601,7 @@ func (g *Registry) appendChunk(w http.ResponseWriter, r *http.Request, u *store.
 		return false
 	}
 	defer f.Close()
-	rc := http.NewResponseController(w)
-	body := &deadlineReader{r: r.Body, extend: func() { rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout)) }}
+	body := &deadlineReader{r: r.Body, rc: http.NewResponseController(w)}
 	n, err := io.Copy(io.NewOffsetWriter(f, u.Size), io.LimitReader(body, limit+1))
 	if err == nil && n > limit {
 		writeError(w, http.StatusRequestEntityTooLarge, codeSizeInvalid,
@@ -633,14 +632,22 @@ func (g *Registry) appendChunk(w http.ResponseWriter, r *http.Request, u *store.
 	return true
 }
 
+// deadlineReader moves the connection's read deadline with the data and
+// clears it at the end of the body: the deadline covers the whole
+// connection, and net/http cancels the request's context when it passes,
+// so it must not cut off the work that follows, such as finishing a blob.
 type deadlineReader struct {
-	r      io.Reader
-	extend func()
+	r  io.Reader
+	rc *http.ResponseController
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
-	d.extend()
-	return d.r.Read(p)
+	d.rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout))
+	n, err := d.r.Read(p)
+	if err == io.EOF {
+		d.rc.SetReadDeadline(time.Time{})
+	}
+	return n, err
 }
 
 // finishUpload checks the session's data against digest and stores it as

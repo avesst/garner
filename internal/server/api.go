@@ -78,10 +78,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	// A slow upload may take longer than ReadTimeout; a stalled one is cut
 	// off after uploadIdleTimeout without data.
-	rc := http.NewResponseController(w)
-	progress := &deadlineReader{r: r.Body, extend: func() {
-		rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout)) // unsupported in tests' recorders
-	}}
+	progress := &deadlineReader{r: r.Body, rc: http.NewResponseController(w)}
 	body := http.MaxBytesReader(w, progress, int64(cfg.Storage.MaxPackageSize))
 	counter := &countingReader{r: body}
 	res, err := s.Ingester.Ingest(r.Context(), counter, ingest.Request{
@@ -117,16 +114,23 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// deadlineReader calls extend before every read, so the read deadline
-// moves with the data.
+// deadlineReader moves the connection's read deadline with the data and
+// clears it at the end of the body: the deadline covers the whole
+// connection, and net/http cancels the request's context when it passes,
+// so it must not cut off the ingest that follows. Test recorders do not
+// support deadlines; the calls then fail harmlessly.
 type deadlineReader struct {
-	r      io.ReadCloser
-	extend func()
+	r  io.ReadCloser
+	rc *http.ResponseController
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
-	d.extend()
-	return d.r.Read(p)
+	d.rc.SetReadDeadline(time.Now().Add(uploadIdleTimeout))
+	n, err := d.r.Read(p)
+	if err == io.EOF {
+		d.rc.SetReadDeadline(time.Time{})
+	}
+	return n, err
 }
 
 func (d *deadlineReader) Close() error { return d.r.Close() }
