@@ -1083,8 +1083,8 @@ All five shipped in 0.1.0, with `.deb` and `.rpm` packages of garner.
 - Named and aggregate repositories.
 - Built-in git config fetch.
 - Helm chart.
-- Further package formats, for example npm, PyPI and Ansible collections
-  (section 17).
+- Further package formats, for example Alpine apk, npm, PyPI,
+  Ansible collections and Windows Package Manager (section 17).
 - Exclusions in `owns:` (`["tool-*", "!tool-cli"]`), so one source can
   reserve a pattern while another owns an exception. The overlap check
   (section 8) takes exclusions into account.
@@ -1120,9 +1120,11 @@ of them, not just the formats that resemble deb and rpm.
 
 | Format | Client protocol | Fits static snapshots | Repository signing | Version order |
 |---|---|---|---|---|
+| Alpine apk | `<repository>/<arch>/APKINDEX.tar.gz` over the package files; Alpine branches (`v3.21`, `edge`) map to suites | Yes | The index is signed with an RSA key, not OpenPGP, so it needs a second kind of signing key; hosts trust keys in `/etc/apk/keys` | apk's own (`1.2.3_rc1-r0`) |
 | npm | Registry JSON (packuments); `npm publish` is a JSON PUT | Mostly: packuments and tarballs are files, but scoped names (`@scope%2fname`) need care behind nginx | None; npm uses provenance and registry signatures instead | semver; dist-tags |
 | PyPI | Simple API (PEP 503/691); `twine upload` uses the legacy multipart API | Yes | None; PEP 740 attestations | PEP 440 |
 | Ansible | Galaxy API v3 | Possibly, if the API responses are pre-rendered; unverified | None | semver |
+| Windows Package Manager (winget) | REST source API: `GET /information`, `POST /manifestSearch`, `GET /packageManifests/{id}`. The other source type, a pre-indexed `source.msix`, must be MSIX-signed with a certificate Windows trusts | No: search is a POST, so the source needs live endpoints | None on a REST source; each manifest pins its installers by SHA-256 | winget's own ordering of dotted versions, not semver |
 | OCI (built, section 19) | Distribution spec, `/v2/` at the host root | Pulls yes, with `Content-Type` set per manifest type; push needs a live API | Separate artifacts (cosign, notation) | Tags are unordered |
 
 ### Constraints on the core
