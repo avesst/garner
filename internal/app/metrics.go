@@ -52,6 +52,17 @@ func (a *App) registerMetrics() {
 			return nil
 		})
 		emit("garner_storage_bytes", "Bytes in the blob store.", nil, float64(size))
+		// The key that signs is read now, so a signing subkey that expired
+		// since the last re-sign, with another taking over, shows too: the
+		// re-sign check runs only at start and reload.
+		if prev, err := a.Store.SignedWith(ctx); err == nil {
+			pending := 0.0
+			if prev != a.Signer().SigningFingerprint() {
+				pending = 1
+			}
+			emit("garner_signing_resign_pending",
+				"1 while stored packages may carry signatures of another key than the one that signs now.", nil, pending)
+		}
 		if days, ok := a.Keyring().ExpiryDays(); ok {
 			emit("garner_signing_key_expiry_days", "Days until the signing key expires.", nil, days)
 		}

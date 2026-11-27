@@ -918,6 +918,9 @@ and in CI after a configuration push.
   - `garner_storage_bytes`
   - `garner_snapshots`
   - `garner_signing_key_expiry_days`
+  - `garner_signing_resign_pending` (1 while packages still need re-signing
+    with the key that signs now; a re-sign failed, waits for a format's
+    section, or the signing subkey changed since the last start or reload)
   - `garner_http_requests_total{route,code}`
 - Alerting is left to Prometheus. There are no built-in notifications.
 

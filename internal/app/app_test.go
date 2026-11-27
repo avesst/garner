@@ -210,3 +210,29 @@ func TestResignLeavesKeyUnrecordedForUnconfiguredFormat(t *testing.T) {
 		t.Errorf("signed_with = %q with only unsigned unconfigured packages, want the current key", got)
 	}
 }
+
+// garner_signing_resign_pending reports a signing key that differs from
+// the one recorded after the last re-sign.
+func TestResignPendingMetric(t *testing.T) {
+	a, _, err := openWith(t, "deb: {}\n", debOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	ctx := context.Background()
+	for _, c := range []struct {
+		recorded, want string
+	}{
+		{a.Signer().SigningFingerprint(), "garner_signing_resign_pending 0\n"},
+		{"OLD", "garner_signing_resign_pending 1\n"},
+	} {
+		if err := a.Store.SetSignedWith(ctx, c.recorded); err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		a.Metrics.Write(&out)
+		if !strings.Contains(out.String(), c.want) {
+			t.Errorf("signed_with %s: metrics lack %q", c.recorded, strings.TrimSpace(c.want))
+		}
+	}
+}
