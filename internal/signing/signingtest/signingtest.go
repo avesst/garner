@@ -17,17 +17,24 @@ import (
 // and skips the test when gpg is missing.
 func SubkeyExport(t *testing.T, dir, pass string) (keyFile, pubKeyring string) {
 	t.Helper()
-	return export(t, dir, pass, "cert", "sign")
+	return export(t, dir, pass, "cert", "sign", "never", "never")
+}
+
+// SubkeyExportExpiring is an unprotected SubkeyExport whose primary and
+// signing subkey expire as given, in gpg's notation ("30d", "never").
+func SubkeyExportExpiring(t *testing.T, dir, primaryExpiry, subExpiry string) (keyFile, pubKeyring string) {
+	t.Helper()
+	return export(t, dir, "", "cert", "sign", primaryExpiry, subExpiry)
 }
 
 // StubSigner is SubkeyExport for a key whose primary signs and whose
 // subkey only encrypts: the file has no usable secret for signing.
 func StubSigner(t *testing.T, dir string) (keyFile, pubKeyring string) {
 	t.Helper()
-	return export(t, dir, "", "sign", "encr")
+	return export(t, dir, "", "sign", "encr", "never", "never")
 }
 
-func export(t *testing.T, dir, pass, primaryUsage, subUsage string) (keyFile, pubKeyring string) {
+func export(t *testing.T, dir, pass, primaryUsage, subUsage, primaryExpiry, subExpiry string) (keyFile, pubKeyring string) {
 	t.Helper()
 	gpg, err := exec.LookPath("gpg")
 	if err != nil {
@@ -50,7 +57,7 @@ func export(t *testing.T, dir, pass, primaryUsage, subUsage string) (keyFile, pu
 		}
 		return string(out)
 	}
-	run("--quick-generate-key", "offline@example.com", "rsa2048", primaryUsage, "never")
+	run("--quick-generate-key", "offline@example.com", "rsa2048", primaryUsage, primaryExpiry)
 	var fpr string
 	for _, line := range strings.Split(run("--with-colons", "--list-keys", "offline@example.com"), "\n") {
 		if f := strings.Split(line, ":"); f[0] == "fpr" {
@@ -61,7 +68,7 @@ func export(t *testing.T, dir, pass, primaryUsage, subUsage string) (keyFile, pu
 	if fpr == "" {
 		t.Fatal("gpg listed no fingerprint")
 	}
-	run("--quick-add-key", fpr, "rsa2048", subUsage, "never")
+	run("--quick-add-key", fpr, "rsa2048", subUsage, subExpiry)
 	keyFile = filepath.Join(dir, "offline.asc")
 	run("--armor", "--output", keyFile, "--export-secret-subkeys", fpr)
 	pubKeyring = filepath.Join(dir, "offline.gpg")

@@ -828,7 +828,8 @@ and in CI after a configuration push.
 - No passphrase by default (unattended signing). `passphrase_file` is
   optional.
 - No expiry by default. When an expiry is set, a metric exposes the days
-  remaining.
+  remaining: until the primary or the signing subkey expires, whichever
+  comes first.
 - All configured keys are published in `/key.asc` and `/key.gpg`. The first
   key signs.
 - Rotation:

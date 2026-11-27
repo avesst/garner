@@ -301,3 +301,40 @@ func write(t *testing.T, path string, data []byte) {
 		t.Fatal(err)
 	}
 }
+
+// The expiry metric follows the key that signs: a signing subkey usually
+// expires while its primary does not, and a primary that expires first
+// ends signing too.
+func TestExpiryDaysCountsSigningSubkey(t *testing.T) {
+	for _, c := range []struct {
+		name, primary, sub string
+		want               float64
+	}{
+		{"subkey expires", "never", "30d", 30},
+		{"primary expires first", "10d", "30d", 10},
+		{"subkey expires first", "60d", "20d", 20},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			key, _ := signingtest.SubkeyExportExpiring(t, dir, c.primary, c.sub)
+			k, err := Load([]KeySource{{KeyFile: key}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			days, ok := k.ExpiryDays()
+			if !ok || days < c.want-1 || days > c.want {
+				t.Errorf("ExpiryDays = %.2f, %v; want about %v days", days, ok, c.want)
+			}
+		})
+	}
+	t.Run("no expiry", func(t *testing.T) {
+		key, _ := signingtest.SubkeyExportExpiring(t, t.TempDir(), "never", "never")
+		k, err := Load([]KeySource{{KeyFile: key}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if days, ok := k.ExpiryDays(); ok {
+			t.Errorf("ExpiryDays = %.2f, true for a key that never expires", days)
+		}
+	})
+}

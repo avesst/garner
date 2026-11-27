@@ -336,14 +336,38 @@ func generate(path, name, email string, cfg *packet.Config) (string, error) {
 	return strings.ToUpper(fmt.Sprintf("%x", e.PrimaryKey.Fingerprint)), nil
 }
 
-// ExpiryDays returns the days until the signing key expires, and false
-// for a key without expiry.
+// ExpiryDays returns the days until the signing key can no longer sign:
+// the earlier of the primary's expiry and that of the subkey that signs,
+// which often expires while the primary does not. It returns 0 once no
+// key can sign, and false for a key without expiry.
 func (k *Keyring) ExpiryDays() (float64, bool) {
 	e := k.signer()
-	id := e.PrimaryIdentity()
-	if id == nil || id.SelfSignature == nil || id.SelfSignature.KeyLifetimeSecs == nil || *id.SelfSignature.KeyLifetimeSecs == 0 {
+	var expires []time.Time
+	if id := e.PrimaryIdentity(); id != nil {
+		if t, ok := expiry(e.PrimaryKey, id.SelfSignature); ok {
+			expires = append(expires, t)
+		}
+	}
+	sk, ok := e.SigningKey(time.Now())
+	if !ok {
+		return 0, true
+	}
+	if sk.PublicKey != e.PrimaryKey {
+		if t, ok := expiry(sk.PublicKey, sk.SelfSignature); ok {
+			expires = append(expires, t)
+		}
+	}
+	if len(expires) == 0 {
 		return 0, false
 	}
-	expires := e.PrimaryKey.CreationTime.Add(time.Duration(*id.SelfSignature.KeyLifetimeSecs) * time.Second)
-	return time.Until(expires).Hours() / 24, true
+	return time.Until(slices.MinFunc(expires, time.Time.Compare)).Hours() / 24, true
+}
+
+// expiry is when pk expires by the lifetime in its self or binding
+// signature.
+func expiry(pk *packet.PublicKey, sig *packet.Signature) (time.Time, bool) {
+	if sig == nil || sig.KeyLifetimeSecs == nil || *sig.KeyLifetimeSecs == 0 {
+		return time.Time{}, false
+	}
+	return pk.CreationTime.Add(time.Duration(*sig.KeyLifetimeSecs) * time.Second), true
 }
