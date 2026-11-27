@@ -94,3 +94,13 @@ func checkParagraphRoundTrip(t *testing.T, p Paragraph) {
 		}
 	}
 }
+
+// FuzzCheckXZ: checkXZ walks the headers of untrusted xz data by hand, so
+// arbitrary bytes must make it fail, not panic or run past the input.
+func FuzzCheckXZ(f *testing.F) {
+	f.Add(compress(f, ".xz", []byte(testControl)))
+	f.Add(compress(f, ".xz", controlTar(f, "./control", testControl)))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		checkXZ(data)
+	})
+}
