@@ -376,6 +376,17 @@ func (s *Server) setOwner(w http.ResponseWriter, r *http.Request) {
 	if req.Namespace == "" {
 		req.Namespace = "os"
 	}
+	var namespaces []string
+	for _, fm := range s.Formats.All() {
+		if !slices.Contains(namespaces, fm.Namespace()) {
+			namespaces = append(namespaces, fm.Namespace())
+		}
+	}
+	if !slices.Contains(namespaces, req.Namespace) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("no enabled format uses namespace %q; enabled: %s",
+			req.Namespace, strings.Join(namespaces, ", ")))
+		return
+	}
 	name := r.PathValue("name")
 	if err := s.Store.SetOwner(r.Context(), req.Namespace, name, req.Owner, store.OwnerManual); err != nil {
 		s.internal(w, err)

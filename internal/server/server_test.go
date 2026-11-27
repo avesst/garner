@@ -276,6 +276,25 @@ func TestAPIWrongMethod(t *testing.T) {
 	}
 }
 
+// An owner can only be set in the namespace of an enabled format.
+func TestSetOwnerNamespace(t *testing.T) {
+	f := newFixture(t)
+	for _, tc := range []struct {
+		body string
+		code int
+	}{
+		{`{"owner": "team-b"}`, http.StatusOK},
+		{`{"owner": "team-b", "namespace": "os"}`, http.StatusOK},
+		{`{"owner": "team-b", "namespace": "oic"}`, http.StatusBadRequest},
+		{`{"owner": "team-b", "namespace": "oci"}`, http.StatusBadRequest}, // oci not enabled here
+	} {
+		w := f.do(http.MethodPut, "/api/v1/owners/app", "adm", []byte(tc.body), "")
+		if w.Code != tc.code {
+			t.Errorf("%s: HTTP %d, want %d: %s", tc.body, w.Code, tc.code, w.Body)
+		}
+	}
+}
+
 func TestTrustedProxyPrefix(t *testing.T) {
 	pol := auth.Policy{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)

@@ -198,7 +198,7 @@ Hands a name to another owner.
 |---|---|---|---|
 | `name` | path | yes | The package or image name. |
 | `owner` | body | yes | The new owner: a token owner label such as `team-b`, or `source:<name>`. |
-| `namespace` | body | no | `os` for package names (the default) or `oci` for image names. |
+| `namespace` | body | no | `os` for package names (the default) or `oci` for image names. Must be the namespace of an enabled format. |
 
 ```json
 {"owner": "team-b", "namespace": "oci"}
@@ -207,7 +207,7 @@ Hands a name to another owner.
 | Code | When |
 |---|---|
 | `200` | The new owner record. |
-| `400` | The body is not JSON or has no `owner`. |
+| `400` | The body is not JSON, has no `owner`, or names a namespace no enabled format uses; the message lists those that are. |
 
 ### `POST /api/v1/sources/{name}/sync`
 
