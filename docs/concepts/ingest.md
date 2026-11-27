@@ -75,8 +75,8 @@ When a delivery fails a check, what happens depends on how it arrived:
   such as a checksum mismatch or two assets that would be the same
   package, skip the asset and are recorded for the record.
 
-`garner conflicts list` shows them. A held package shows in
-`garner packages list` with state `held`, and `garner approve <id>`
+`garner conflicts list` shows them. `garner packages list --state held`
+lists held packages with their IDs, and `garner approve <id>`
 publishes it. Approving a package under another owner's name needs the
 `admin` scope as well as `publish`. `garner remove` drops it instead.
 

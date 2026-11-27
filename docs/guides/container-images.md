@@ -136,8 +136,8 @@ move and how `min_release_age` works for images.
 Both need `admin`:
 
 ```sh
-garner remove team/tool --version sha256:<digest>   # one image
-garner remove team/tool                             # every image of the name
+garner remove team/tool --format oci --version sha256:<digest>   # one image
+garner remove team/tool --format oci                             # every image of the name
 ```
 
 A tag alone is deleted through the registry API,

@@ -170,3 +170,38 @@ func TestTokenURLModeFlags(t *testing.T) {
 		}
 	}
 }
+
+// The filters and targets of the API reach it under their own names.
+func TestFlagsReachAPI(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.EscapedPath()+"?"+r.URL.RawQuery+" "+string(b))
+		io.WriteString(w, "null")
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"packages", "list", "--format", "oci", "--arch", "amd64", "--state", "held"},
+			"GET /api/v1/packages?arch=amd64&format=oci&state=held "},
+		{[]string{"remove", "team/tool", "--format", "oci", "--version", "sha256:ab"},
+			"DELETE /api/v1/packages/team%2Ftool?format=oci&version=sha256%3Aab "},
+		{[]string{"owner", "set", "team/tool", "team-b", "--namespace", "oci"},
+			`PUT /api/v1/owners/team%2Ftool? {"owner":"team-b","namespace":"oci"}`},
+	} {
+		got = nil
+		var out, errOut strings.Builder
+		if code := runAPIWith(srv.URL, tc.args[0], tc.args[1:], &out, &errOut); code != 0 {
+			t.Fatalf("garner %s: exit %d\n%s", strings.Join(tc.args, " "), code, errOut.String())
+		}
+		if len(got) != 1 || strings.TrimSpace(got[0]) != strings.TrimSpace(tc.want) {
+			t.Errorf("garner %s sent %q, want %q", strings.Join(tc.args, " "), got, tc.want)
+		}
+	}
+	var out, errOut strings.Builder
+	if code := runAPIWith(srv.URL, "owner", []string{"list", "--namespace", "oci"}, &out, &errOut); code != 2 {
+		t.Errorf("owner list --namespace: exit %d, want 2", code)
+	}
+}

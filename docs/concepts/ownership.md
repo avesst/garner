@@ -90,8 +90,8 @@ deb names are compared in lower case, as dpkg compares them.
 
 ### Changing an owner
 
-`garner owner set <name> <owner>` hands a package name to another owner.
-It needs the `admin` scope. Admin tokens do not bypass ownership
+`garner owner set <name> <owner>` hands a package name to another owner,
+and with `--namespace oci` an image name. It needs the `admin` scope. Admin tokens do not bypass ownership
 otherwise: an admin uploading a package still needs to own its name.
 
 Approving a held package that another owner's name blocked needs `admin`
@@ -115,9 +115,6 @@ not own. It does not change the owner.
 
 - Ownership stays when all of a name's packages are removed; it moves only
   with `garner owner set` or a reservation.
-- `garner owner set` changes package names only. An image name's owner can
-  be changed through the API (`PUT /api/v1/owners/{name}` with
-  `"namespace": "oci"`), not from the command line.
 - Packages stored before the `Replaces` and `Obsoletes` check was added
   are not checked again.
 - One source cannot reserve a pattern while another owns an exception to

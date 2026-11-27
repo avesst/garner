@@ -54,7 +54,8 @@ about 10 seconds later. `docker push` does not read it back, so this goes
 unnoticed in CI. Layers garner already has are not sent again.
 
 Deleting a tag (`DELETE /v2/<name>/manifests/<tag>`) or an image by digest
-needs `admin`; `garner remove <name> --version <digest>` does the same.
+needs `admin`; `garner remove <name> --format oci --version <digest>`
+does the same.
 
 ### Pulling
 

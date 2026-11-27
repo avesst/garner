@@ -123,12 +123,12 @@ func runAPI(cmd string, args []string, stdout, stderr io.Writer) int {
 // than silently ignored.
 var apiFlags = map[string][]string{
 	"upload":    {"suite", "release"},
-	"remove":    {"version", "arch", "distribution", "json"},
-	"owner":     {"json"},
+	"remove":    {"version", "arch", "distribution", "format", "json"},
+	"owner":     {"namespace", "json"},
 	"sync":      {"ignore-age", "repo"},
 	"approve":   {"json"},
 	"conflicts": {"all", "json"},
-	"packages":  {"name", "distribution", "all", "json"},
+	"packages":  {"name", "format", "arch", "distribution", "state", "all", "json"},
 	"snapshot":  {"json"},
 	"verify":    {"wait", "config-hash", "strict", "json"},
 	"status":    {"json"},
@@ -137,7 +137,7 @@ var apiFlags = map[string][]string{
 
 // subcommandFlags are flags of apiFlags that only one subcommand takes.
 var subcommandFlags = map[string]map[string]string{
-	"owner":    {"json": "list"},
+	"owner":    {"json": "list", "namespace": "set"},
 	"snapshot": {"json": "list"},
 	"token":    {"name": "create", "owner": "create", "scopes": "create"},
 }
@@ -168,6 +168,9 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	version := str("version", "version, or an image's digest")
 	arch := str("arch", "architecture")
 	dist := str("distribution", "suite or release")
+	format := str("format", "deb, rpm or oci")
+	state := str("state", "active, held or removed")
+	namespace := str("namespace", "os for package names, oci for image names (default os)")
 	name := str("name", "name")
 	owner := str("owner", "owner label")
 	scopes := str("scopes", "comma-separated scopes: upload, publish, admin")
@@ -262,10 +265,10 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 		}
 	case "remove":
 		if len(pos) != 1 {
-			return usageErr("remove NAME [--version V] [--arch A] [--distribution D]")
+			return usageErr("remove NAME [--version V] [--arch A] [--distribution D] [--format F]")
 		}
 		q := url.Values{}
-		for k, v := range map[string]string{"version": *version, "arch": *arch, "distribution": *dist} {
+		for k, v := range map[string]string{"version": *version, "arch": *arch, "distribution": *dist, "format": *format} {
 			if v != "" {
 				q.Set(k, v)
 			}
@@ -293,12 +296,12 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 		case sub == "set" && len(pos) == 3:
 			var out store.NameOwner
 			if err := c.do(http.MethodPut, "/api/v1/owners/"+url.PathEscape(pos[1]), nil,
-				jsonBody(server.SetOwnerRequest{Owner: pos[2]}), &out); err != nil {
+				jsonBody(server.SetOwnerRequest{Owner: pos[2], Namespace: *namespace}), &out); err != nil {
 				return fail(err)
 			}
 			fmt.Fprintf(stdout, "%s is now owned by %s\n", out.Name, out.Owner)
 		default:
-			return usageErr("owner list | owner set NAME OWNER")
+			return usageErr("owner list | owner set NAME OWNER [--namespace N]")
 		}
 	case "sync":
 		if len(pos) != 1 || (*repo != "" && *ignoreAge == "") {
@@ -351,14 +354,14 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 		})
 	case "packages":
 		if sub != "list" && sub != "" {
-			return usageErr("packages list [--name N] [--distribution D] [--all]")
+			return usageErr("packages list [--name N] [--format F] [--arch A] [--distribution D] [--state S] [--all]")
 		}
 		q := url.Values{}
-		if *name != "" {
-			q.Set("name", *name)
-		}
-		if *dist != "" {
-			q.Set("distribution", *dist)
+		for k, v := range map[string]string{"name": *name, "format": *format, "arch": *arch,
+			"distribution": *dist, "state": *state} {
+			if v != "" {
+				q.Set(k, v)
+			}
 		}
 		if *all {
 			q.Set("all", "1")

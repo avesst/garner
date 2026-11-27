@@ -28,8 +28,10 @@ deleted at once: the snapshots that still list it keep it reachable, and a
 [rollback](publishing.md#rollback) to one of them brings it back.
 
 `garner remove <name>` takes a package out of future snapshots by hand,
-optionally only one `--version`, `--arch` or `--distribution`. For an
-image, `--version` is the digest. It needs the `admin` scope.
+optionally only one `--version`, `--arch`, `--distribution` or
+`--format`. For an image, `--version` is the digest. Without `--format`, a
+package and an image of the same name are both removed. It needs the
+`admin` scope.
 
 ### Garbage collection
 

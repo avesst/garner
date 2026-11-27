@@ -76,8 +76,9 @@ without `upload`.
 
 ## Held packages
 
-`garner status` shows held packages, and `garner packages list` shows them
-with state `held`. A package is held because:
+`garner status` counts held packages, and
+`garner packages list --state held` lists them with the IDs `approve`
+takes. A package is held because:
 
 - a sync delivered a name owned by someone else (`garner conflicts list`
   shows which), or

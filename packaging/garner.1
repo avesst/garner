@@ -104,15 +104,28 @@ if configured, else the first listed.
 Scope:
 .BR upload .
 .TP
-.B remove \fINAME\fR \fR[\fB\-\-version \fIV\fR] [\fB\-\-arch \fIA\fR] [\fB\-\-distribution \fID\fR]
-Remove the matching versions of a package.
+.B remove \fINAME\fR \fR[\fB\-\-version \fIV\fR] [\fB\-\-arch \fIA\fR] [\fB\-\-distribution \fID\fR] [\fB\-\-format \fIF\fR]
+Remove the matching versions of a package or image.
+Without
+.BR \-\-format ,
+a package and an image of the same name are both removed;
+.B \-\-format
+.BR deb ,
+.B rpm
+or
+.B oci
+limits it to one.
 Scope:
 .BR admin .
 .TP
 .B owner list
 .TQ
-.B owner set \fINAME OWNER\fR
-Show or change which owner may upload a package name.
+.B owner set \fINAME OWNER\fR [\fB\-\-namespace \fIN\fR]
+Show or change which owner may deliver a name.
+Package names are in namespace
+.B os
+(the default), image names in
+.BR oci .
 .B set
 needs scope
 .BR admin .
@@ -167,9 +180,17 @@ only.
 Scope:
 .BR publish .
 .TP
-.B packages list \fR[\fB\-\-name \fIN\fR] [\fB\-\-distribution \fID\fR] [\fB\-\-all\fR]
+.B packages list \fR[\fB\-\-name \fIN\fR] [\fB\-\-format \fIF\fR] [\fB\-\-arch \fIA\fR] [\fB\-\-distribution \fID\fR] [\fB\-\-state \fIS\fR] [\fB\-\-all\fR]
 List packages; removed ones only with
 .BR \-\-all .
+.B \-\-state
+.BR active ,
+.B held
+or
+.B removed
+lists only that state, such as the held packages
+.B approve
+takes.
 .TP
 .B snapshot list
 .TQ
