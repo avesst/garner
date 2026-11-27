@@ -62,7 +62,7 @@ func (s *Store) PutOpen(r io.Reader) (Blob, *os.File, error) {
 
 	// CreateTemp makes the file 0600. Pool entries are hardlinks to it, so
 	// a proxy serving public/ from disk through the group needs it
-	// world-readable, like the indexes (contrib/garner.tmpfiles).
+	// world-readable, like the indexes (packaging/garner.tmpfiles).
 	err = tmp.Chmod(0o644)
 	h := sha256.New()
 	var size int64

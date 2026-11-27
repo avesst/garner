@@ -7,10 +7,10 @@ project_name: garner
 before:
   hooks:
     - mkdir -p build/man
-    - sh -c 'gzip -9n < docs/garner.1 > build/man/garner.1.gz'
-    - sh -c 'gzip -9n < docs/garner.yaml.5 > build/man/garner.yaml.5.gz'
+    - sh -c 'gzip -9n < packaging/garner.1 > build/man/garner.1.gz'
+    - sh -c 'gzip -9n < packaging/garner.yaml.5 > build/man/garner.yaml.5.gz'
     # The contrib unit describes a manual install from /usr/local/bin.
-    - sh -c "{ cat packaging/garner.service.head; sed '1,/^$/d; s|/usr/local/bin/garner|/usr/bin/garner|g' contrib/garner.service; } > build/garner.service"
+    - sh -c "{ cat packaging/garner.service.head; sed '1,/^$/d; s|/usr/local/bin/garner|/usr/bin/garner|g' packaging/garner.service; } > build/garner.service"
 
 builds:
   - id: garner
@@ -52,12 +52,12 @@ nfpms:
     contents:
       - src: build/garner.service
         dst: /usr/lib/systemd/system/garner.service
-      - src: contrib/garner.sysusers
+      - src: packaging/garner.sysusers
         dst: /usr/lib/sysusers.d/garner.conf
-      - src: contrib/garner.tmpfiles
+      - src: packaging/garner.tmpfiles
         dst: /usr/lib/tmpfiles.d/garner.conf
       # Local edits survive upgrades (dpkg conffile, rpm %config(noreplace)).
-      - src: contrib/garner.yaml
+      - src: packaging/garner.yaml
         dst: /etc/garner/garner.yaml
         type: config|noreplace
       - src: build/man/garner.1.gz

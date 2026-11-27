@@ -12,7 +12,7 @@ each piece is done. Update it as slices land.
 - Go: 1.26 (`go 1.26` in `go.mod`).
 - CI: GitHub Actions. `ci.yml` runs `just check`, the build and the
   migrations on PostgreSQL; `e2e.yml` runs `just e2e`, except for pushes
-  that change only documentation, `contrib/` or `scripts/`.
+  that change only documentation, `packaging/` or `scripts/`.
 - Integration tests run real clients in containers (Docker locally and in CI).
 - `just preview` (`cmd/garner-preview`) serves the UI with demo
   packages and a made-up status, and reloads it when `ui.html` changes.

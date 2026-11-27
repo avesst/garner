@@ -55,7 +55,7 @@ Installing garner and putting it behind a reverse proxy are in the
   validation
 - [HTTP API](reference/api.md)
 - `garner(1)` and `garner.yaml(5)`: the man pages, installed with the
-  package ([source](garner.1), [source](garner.yaml.5))
+  `.deb` and `.rpm` packages (`man garner`, `man garner.yaml`)
 
 ## For contributors
 

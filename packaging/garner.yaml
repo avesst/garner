@@ -1,6 +1,6 @@
 # garner configuration. Set public_url to the URL clients use, then run
-# garner init (see the systemd unit for how). The full set of options is in
-# /usr/share/doc/garner/design.md.gz, section 5.
+# garner init (see the systemd unit for how). Every option is described
+# in garner.yaml(5).
 
 server:
   listen: ":8080"

@@ -83,7 +83,7 @@ apt-cache policy garner-hello
 	}
 }
 
-// contrib/garner.tmpfiles makes the state directory 0750 so a reverse
+// packaging/garner.tmpfiles makes the state directory 0750 so a reverse
 // proxy in the garner group can serve public/ from disk. The proxy must
 // then be able to read the packages, not only the indexes.
 func TestPublicReadableByGroup(t *testing.T) {

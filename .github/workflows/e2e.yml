@@ -1,20 +1,21 @@
 name: e2e
 
 # Real apt, dnf and container clients, against garner in-process and
-# from its container image. Skipped when only documentation, contrib
-# files or scripts change; run it by hand with workflow_dispatch.
+# from its container image. Skipped when only documentation, packaging
+# files or scripts change; the packages are tested by ci.yml. Run it by
+# hand with workflow_dispatch.
 on:
   push:
     paths-ignore:
       - "**.md"
       - "docs/**"
-      - "contrib/**"
+      - "packaging/**"
       - "scripts/**"
   pull_request:
     paths-ignore:
       - "**.md"
       - "docs/**"
-      - "contrib/**"
+      - "packaging/**"
       - "scripts/**"
   workflow_dispatch:
 

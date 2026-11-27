@@ -416,4 +416,4 @@ sources:
     approval: manual
 ```
 
-`contrib/garner.yaml` is a starting file for a new installation.
+`packaging/garner.yaml` is a starting file for a new installation.

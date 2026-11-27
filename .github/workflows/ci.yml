@@ -1,7 +1,7 @@
 name: ci
 
 # Skipped when only Markdown changes: no job reads it. The man pages in
-# docs/ are not Markdown and still run the packages job.
+# packaging/ are not Markdown and still run the packages job.
 on:
   push:
     paths-ignore:

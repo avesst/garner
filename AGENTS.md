@@ -36,10 +36,10 @@ These come from `docs/dev/design.md` sections 17 and 18, which explain them.
 A change to configuration keys updates, together:
 
 - `internal/config` (types and validation),
-- `docs/reference/configuration.md` and the `docs/garner.yaml.5` man page,
-- `contrib/garner.yaml` when the key belongs in a new installation's file.
+- `docs/reference/configuration.md` and the `packaging/garner.yaml.5` man page,
+- `packaging/garner.yaml` when the key belongs in a new installation's file.
 
-A change to commands or flags updates `docs/garner.1`. When a slice lands
+A change to commands or flags updates `packaging/garner.1`. When a slice lands
 or an item gets verified, update `docs/dev/plan.md`.
 
 ## Releases
