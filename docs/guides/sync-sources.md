@@ -118,11 +118,10 @@ A new source polls for the first time within 30 seconds. Then:
 garner status
 ```
 
-shows each source's last run, last success and last error, and releases
-waiting for `min_release_age`. `garner status --json` adds, per source,
-the repositories without matching assets (`repos_without_assets`) and
-the assets skipped for an unconfigured suite, release or architecture
-(`skipped_assets`). `garner packages list --name tool` shows what
+shows each source's last run, last success and last error, the
+repositories without matching assets, the assets skipped for an
+unconfigured suite, release or architecture, and releases waiting for
+`min_release_age`. `garner packages list --name tool` shows what
 arrived.
 
 To poll at once, without waiting for the interval:
@@ -145,11 +144,11 @@ garner sync tool
 
 ## When nothing arrives
 
-- **The repository is in `repos_without_assets`** in
-  `garner status --json`: no asset matched. Check the asset names against the
+- **The repository is listed under `WITHOUT ASSETS`** in
+  `garner status`: no asset matched. Check the asset names against the
   rules and the built-in exclusions (`*.src.rpm`, `*-dbgsym*`,
   `*-debuginfo*`).
-- **The asset is in `skipped_assets`**: the package's architecture, or its target
+- **The asset is listed under `SKIPPED`**: the package's architecture, or its target
   suite or release, is not configured.
 - **A deferred release:** `min_release_age` is waiting; status shows when
   it becomes eligible.

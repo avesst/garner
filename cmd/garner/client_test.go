@@ -205,3 +205,48 @@ func TestFlagsReachAPI(t *testing.T) {
 		t.Errorf("owner list --namespace: exit %d, want 2", code)
 	}
 }
+
+// Tables show the fields that tell rows apart or explain a missing asset.
+func TestTableColumns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/status":
+			io.WriteString(w, `{"sources": [{"name": "org",
+				"repos_without_assets": ["org/docs"], "skipped_assets": ["tool_1.0_s390x.deb"]},
+				{"name": "quiet"}]}`)
+		case "/api/v1/owners":
+			io.WriteString(w, `[{"namespace": "oci", "name": "tool", "owner": "team-a"}]`)
+		case "/api/v1/packages":
+			io.WriteString(w, `[{"id": "p1", "name": "tool", "verify_status": "unverified"}]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		args []string
+		want []string
+		once []string
+	}{
+		{[]string{"status"}, []string{"WITHOUT ASSETS", "org/docs", "SKIPPED", "tool_1.0_s390x.deb"}, []string{"quiet"}},
+		{[]string{"owner", "list"}, []string{"NAMESPACE", "oci"}, nil},
+		{[]string{"packages", "list"}, []string{"VERIFY", "unverified"}, nil},
+	} {
+		var out, errOut strings.Builder
+		if code := runAPIWith(srv.URL, tc.args[0], tc.args[1:], &out, &errOut); code != 0 {
+			t.Fatalf("%v: exit %d: %s", tc.args, code, errOut.String())
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(out.String(), w) {
+				t.Errorf("%v output lacks %q:\n%s", tc.args, w, out.String())
+			}
+		}
+		// A source without items gets no rows in the extra lists.
+		for _, o := range tc.once {
+			if n := strings.Count(out.String(), o); n != 1 {
+				t.Errorf("%v output has %q %d times, want 1:\n%s", tc.args, o, n, out.String())
+			}
+		}
+	}
+}

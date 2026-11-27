@@ -287,9 +287,9 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 			}
 			print(out, func() {
 				tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
-				fmt.Fprintln(tw, "NAME\tOWNER\tSOURCE\tASSIGNED")
+				fmt.Fprintln(tw, "NAMESPACE\tNAME\tOWNER\tSOURCE\tASSIGNED")
 				for _, o := range out {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", o.Name, o.Owner, o.Source, o.AssignedAt)
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", o.Namespace, o.Name, o.Owner, o.Source, o.AssignedAt)
 				}
 				tw.Flush()
 			})
@@ -437,6 +437,10 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", s.Name, dash(s.LastRun), dash(s.LastSuccess), dash(s.LastError))
 				}
 				tw.Flush()
+				printSourceList(stdout, st.Sources, "WITHOUT ASSETS\tREPOSITORY",
+					func(s server.SourceStatus) []string { return s.Unmatched })
+				printSourceList(stdout, st.Sources, "SKIPPED\tASSET",
+					func(s server.SourceStatus) []string { return s.Skipped })
 				printDeferred(stdout, st.Sources)
 			}
 		})
@@ -471,6 +475,22 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// printSourceList prints one row per source and item, under header, when
+// any source has items.
+func printSourceList(w io.Writer, sources []server.SourceStatus, header string, items func(server.SourceStatus) []string) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	for _, s := range sources {
+		for _, it := range items(s) {
+			if header != "" {
+				fmt.Fprintln(tw, "\n"+header)
+				header = ""
+			}
+			fmt.Fprintf(tw, "%s\t%s\n", s.Name, it)
+		}
+	}
+	tw.Flush()
+}
+
 // printDeferred lists releases waiting for min_release_age, if any.
 func printDeferred(w io.Writer, sources []server.SourceStatus) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
@@ -493,10 +513,10 @@ func printDeferred(w io.Writer, sources []server.SourceStatus) {
 
 func printPackages(w io.Writer, pkgs []server.PackageJSON) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tFORMAT\tNAME\tVERSION\tARCH\tDISTRIBUTION\tSTATE\tORIGIN")
+	fmt.Fprintln(tw, "ID\tFORMAT\tNAME\tVERSION\tARCH\tDISTRIBUTION\tSTATE\tORIGIN\tVERIFY")
 	for _, p := range pkgs {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Format, p.Name, p.Version, p.Arch,
-			p.Distribution, p.State, p.OriginRef)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, p.Format, p.Name, p.Version, p.Arch,
+			p.Distribution, p.State, p.OriginRef, p.VerifyStatus)
 	}
 	tw.Flush()
 }

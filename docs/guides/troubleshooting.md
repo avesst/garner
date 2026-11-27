@@ -90,10 +90,10 @@ instead.
 
 ## A source delivers nothing
 
-`garner status` shows the last error per source. `garner status --json`
-adds `repos_without_assets` (no asset matched the rules) and
-`skipped_assets` (architecture, suite or release not configured), and
-lists `deferred_releases` waiting for `min_release_age`.
+`garner status` shows, per source, the last error, the repositories
+without assets (no asset matched the rules), the skipped assets
+(architecture, suite or release not configured) and the releases waiting
+for `min_release_age`.
 
 - **Rate limited:** errors mention the rate limit, and
   `garner_forge_ratelimit_remaining` is low. Give the forge a token.
