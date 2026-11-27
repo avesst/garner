@@ -249,6 +249,33 @@ func TestPublishRemoveAndRead(t *testing.T) {
 	}
 }
 
+func TestAPIWrongMethod(t *testing.T) {
+	f := newFixture(t)
+	for _, tc := range []struct {
+		method, path string
+		code         int
+		allow        string
+	}{
+		{http.MethodGet, "/api/v1/upload", http.StatusMethodNotAllowed, "PUT"},
+		{http.MethodPost, "/api/v1/status", http.StatusMethodNotAllowed, "GET, HEAD"},
+		{http.MethodGet, "/api/v1/tokens/ci", http.StatusMethodNotAllowed, "DELETE"},
+		{http.MethodPut, "/api/v1/tokens", http.StatusMethodNotAllowed, "GET, HEAD, POST"},
+		{http.MethodGet, "/api/v1/packages/x/approve", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodGet, "/api/v1/nope", http.StatusNotFound, ""},
+		{http.MethodPost, "/api/v1/nope", http.StatusNotFound, ""},
+	} {
+		w := f.do(tc.method, tc.path, "", nil, "")
+		if w.Code != tc.code || w.Header().Get("Allow") != tc.allow {
+			t.Errorf("%s %s: HTTP %d, Allow %q; want %d, %q", tc.method, tc.path,
+				w.Code, w.Header().Get("Allow"), tc.code, tc.allow)
+		}
+		var body struct{ Error string }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Error == "" {
+			t.Errorf("%s %s: want a JSON error, got %q", tc.method, tc.path, w.Body)
+		}
+	}
+}
+
 func TestTrustedProxyPrefix(t *testing.T) {
 	pol := auth.Policy{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)

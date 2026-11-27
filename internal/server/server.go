@@ -132,7 +132,16 @@ func (s *Server) Handler() http.Handler {
 	handle("GET /api/v1/tokens", s.authed(auth.ScopeAdmin, s.listTokens))
 	handle("POST /api/v1/tokens", s.authed(auth.ScopeAdmin, s.createToken))
 	handle("DELETE /api/v1/tokens/{name}", s.authed(auth.ScopeAdmin, s.revokeToken))
+	// The catch-all matches every method, so ServeMux never answers 405
+	// for an API path itself; find the methods the path does take.
 	handle("/api/", func(w http.ResponseWriter, r *http.Request) {
+		if allow := allowedMethods(mux, r); len(allow) > 0 {
+			methods := strings.Join(allow, ", ")
+			w.Header().Set("Allow", methods)
+			writeError(w, http.StatusMethodNotAllowed,
+				fmt.Sprintf("method %s not allowed; allowed: %s", r.Method, methods))
+			return
+		}
 		writeError(w, http.StatusNotFound, "no such API endpoint")
 	})
 	for prefix, h := range s.Live {
@@ -151,6 +160,21 @@ func (s *Server) Handler() http.Handler {
 		files.ServeHTTP(w, r)
 	})
 	return mux
+}
+
+// allowedMethods returns the methods for which mux routes r's path to a
+// pattern other than the "/api/" catch-all. A GET route also takes HEAD.
+func allowedMethods(mux *http.ServeMux, r *http.Request) []string {
+	var allow []string
+	for _, m := range []string{http.MethodDelete, http.MethodGet, http.MethodHead,
+		http.MethodPatch, http.MethodPost, http.MethodPut} {
+		probe := *r
+		probe.Method = m
+		if _, pattern := mux.Handler(&probe); pattern != "" && pattern != "/api/" {
+			allow = append(allow, m)
+		}
+	}
+	return allow
 }
 
 // ownRoutes are garner's own paths, which no format may claim (section
