@@ -150,7 +150,7 @@ applies to uploaded packages.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `retention` | integer | `3` | Versions kept per package name, distribution and architecture. Older versions leave future snapshots; pinned packages are always kept. Must be at least 1. |
+| `retention` | integer | `3` | Versions kept per package name, distribution and architecture. Older versions leave future snapshots. Must be at least 1. |
 | `poll_interval` | duration | `1h` | How often a source is polled, with ±10 % jitter. Must be at least `1m`. |
 | `verify` | `opportunistic` or `required` | `opportunistic` | Checksum policy. An asset is checked against the forge's digest or the release's checksum file when one exists, and a mismatch always rejects it. `opportunistic` accepts assets without a checksum and marks them unverified. `required` rejects them. |
 | `approval` | `auto` or `manual` | `auto` | With `manual`, new packages are stored as held and published only after `garner approve`. |

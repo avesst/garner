@@ -410,7 +410,7 @@ migrations to PostgreSQL; the test suite itself runs on SQLite.
 |---|---|---|
 | `repositories` | `id`, `name`, `signed_with` | One row (`default`) so far. `signed_with` is the fingerprint of the key packages were last re-signed with. Every other table references it, so named repositories can be added without a data migration. |
 | `blobs` | `sha256` PK, `size`, `created_at` | Originals and re-signed variants. |
-| `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
+| `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | `pinned` is for keeping a package outside retention; nothing sets it yet. Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
 | `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `owner_conflict`, `created_at` | Where a package is published. `owner_conflict` marks a hold whose deliverer did not own the name (section 8). |
 | `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`; images use `oci` (section 17). |
 | `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. Only ownership conflicts are open: a delivery held for a decision, resolved when an approve or remove leaves none of its placements held. The others record an asset sync skipped for good (its release is processed), so they are written resolved, as history; `garner_conflicts_total{kind}` counts every kind as events. Rows are never deleted. |
@@ -489,7 +489,10 @@ Authorization: Basic <name>:<token>
 Body: the package file
 ```
 
-- Without `suite`/`release`, the target is `stable`.
+- Without `suite`/`release`, the target is `stable` if configured, else
+  the first configured suite or release.
+- One upload has one target: a repeated `suite` or `release` counts once.
+  Placing a package in two suites takes two uploads.
 - Requires the `upload` scope.
 - `200` on success or an identical re-upload. `409` on a content conflict or
   when the name is owned by someone else. `403` on a missing scope.
@@ -655,7 +658,8 @@ listing does not reach.
 - `assets` rules are evaluated in order; the first rule that matches the
   asset name and sets a target for the asset's format wins: `suite` for deb,
   `release` for rpm. A `*` rule with only `suite` therefore does not
-  swallow rpm assets. With no rules, the target is `stable`; with rules but
+  swallow rpm assets. With no rules, the target is the default
+  suite or release (`stable` if configured, else the first); with rules but
   none applying, the asset is skipped.
 - If two assets in one release map to the same (name, version, arch,
   distribution), both are skipped and a conflict is recorded. garner never
@@ -732,7 +736,9 @@ when another file of the same version is already in the distribution.
 
 1. Lock: one publish at a time.
 2. Select active placements and apply retention: keep the newest N versions
-   per (name, distribution, arch), plus all `pinned` packages.
+   per (name, distribution, arch). Packages marked `pinned` would be kept
+   regardless, but nothing sets the column yet: no command or endpoint
+   pins a package.
 3. Render metadata into `snapshots/<id>/` (ULID): deb `Packages`, `Release`,
    by-hash; rpm `primary`, `filelists`, `other`, `repomd.xml`; the UI,
    keys and client files.
@@ -853,9 +859,11 @@ and in CI after a configuration push.
   3. Move the new key first.
   4. Remove the old key.
 
-  apt `InRelease` can carry both signatures during the overlap. rpm packages
-  carry one signature, so promoting a new key re-signs all rpm packages from
-  their originals. garner compares the signing key with the one recorded
+  Only the first key signs: `InRelease`, `Release.gpg` and
+  `repomd.xml.asc` carry one signature, made with it. Clients must
+  therefore have the new key before step 3, which is what step 2 is for.
+  rpm packages carry one signature too, so promoting a new key re-signs
+  all rpm packages from their originals. garner compares the signing key with the one recorded
   after the last re-sign at every start and reload, so a promotion takes
   effect through a restart too, and an interrupted re-sign is redone. The
   signing key is the subkey that makes the signatures, so adding a new
@@ -1287,7 +1295,7 @@ images pushed to garner or named by a source are stored (section 1).
   which no request or configuration names.
 - Retention: every tagged package is kept, plus the `oci.retention` newest
   untagged ones per name (default 10; a registry source's own `retention`
-  when it sets one, never `defaults.retention`) and pinned ones. Tagged
+  when it sets one, never `defaults.retention`). Tagged
   packages do not count towards it. Deployments pin
   digests, so a moved `latest` must not break the digest it pointed at
   before.
