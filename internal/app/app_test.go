@@ -206,7 +206,7 @@ func TestResignLeavesKeyUnrecordedForUnconfiguredFormat(t *testing.T) {
 	if err := a.resignIfNeeded(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := signedWith(); got != a.Signer().Fingerprint() {
+	if got := signedWith(); got != a.Signer().SigningFingerprint() {
 		t.Errorf("signed_with = %q with only unsigned unconfigured packages, want the current key", got)
 	}
 }

@@ -3,6 +3,7 @@ package signing
 import (
 	"bytes"
 	"crypto"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 
 	"github.com/avesst/garner/internal/signing/signingtest"
@@ -96,6 +98,10 @@ func TestPublicKeysContainAllKeys(t *testing.T) {
 	}
 	if len(k.Fingerprint()) != 40 {
 		t.Errorf("Fingerprint = %q, want 40 hex digits", k.Fingerprint())
+	}
+	if k.SigningFingerprint() != k.Fingerprint() {
+		t.Errorf("SigningFingerprint = %s for a key whose primary signs, want the primary %s",
+			k.SigningFingerprint(), k.Fingerprint())
 	}
 }
 
@@ -242,6 +248,27 @@ func TestSubkeyExportSigns(t *testing.T) {
 			write(t, filepath.Join(dir, "Release.gpg"), sig.Bytes())
 			runGpgv(t, gpgv, keyring, filepath.Join(dir, "InRelease"))
 			runGpgv(t, gpgv, keyring, filepath.Join(dir, "Release.gpg"), filepath.Join(dir, "Release"))
+
+			// The re-sign record and rpmsign use SigningFingerprint, so it
+			// must name the subkey that made the signature.
+			if k.SigningFingerprint() == k.Fingerprint() {
+				t.Errorf("SigningFingerprint is the primary %s, want the signing subkey", k.Fingerprint())
+			}
+			block, err := armor.Decode(&sig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pk, err := packet.Read(block.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, ok := pk.(*packet.Signature)
+			if !ok || s.IssuerKeyId == nil {
+				t.Fatalf("detached signature: got %T without an issuer", pk)
+			}
+			if fp := k.SigningFingerprint(); fmt.Sprintf("%016X", *s.IssuerKeyId) != fp[len(fp)-16:] {
+				t.Errorf("signature issuer %016X, want the end of SigningFingerprint %s", *s.IssuerKeyId, fp)
+			}
 		})
 	}
 }

@@ -348,7 +348,7 @@ func (a *App) warnUnconfiguredFormats(ctx context.Context) {
 // the one they were last signed with: after a reload or a restart with a
 // new key, or after a re-sign that did not finish. Then it publishes.
 func (a *App) resignIfNeeded(ctx context.Context) error {
-	fp := a.Signer().Fingerprint()
+	fp := a.Signer().SigningFingerprint()
 	prev, err := a.Store.SignedWith(ctx)
 	if err != nil {
 		a.Log.Error("cannot read which key packages are signed with", "err", err)

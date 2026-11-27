@@ -141,7 +141,9 @@ func (f *Format) Prepare(ctx context.Context, original, tmpDir string) (string, 
 		return "", err
 	}
 	cmd := exec.CommandContext(ctx, f.rpmsign, "--resign",
-		"--define", "_gpg_name "+f.Signer().Fingerprint(),
+		// "!" makes gpg use exactly this (sub)key, the one garner records
+		// as signing, instead of choosing a signing subkey itself.
+		"--define", "_gpg_name "+f.Signer().SigningFingerprint()+"!",
 		"--define", "_gpg_path "+home,
 		"--define", "__gpg "+f.gpg,
 		"--define", "_openpgp_sign gpg",

@@ -31,8 +31,13 @@ type Signer interface {
 	DetachSign(w io.Writer, data []byte) error
 	// PublicKeys returns every published key, armored and binary.
 	PublicKeys() (armored, binary []byte, err error)
-	// Fingerprint is the signing key's fingerprint, upper-case hex.
+	// Fingerprint is the signing key's primary fingerprint, upper-case
+	// hex: what identifies the key to people.
 	Fingerprint() string
+	// SigningFingerprint is the fingerprint of the key that makes the
+	// signatures, upper-case hex: a signing subkey when the key has one,
+	// so it changes when a new signing subkey is added.
+	SigningFingerprint() string
 }
 
 // KeyExporter is implemented by signers whose private key can be handed to
@@ -250,6 +255,14 @@ func serializePublic(w io.Writer, e *openpgp.Entity) error {
 
 func (k *Keyring) Fingerprint() string {
 	return fmt.Sprintf("%X", k.signer().PrimaryKey.Fingerprint)
+}
+
+func (k *Keyring) SigningFingerprint() string {
+	sk, ok := k.signer().SigningKey(time.Now())
+	if !ok {
+		return k.Fingerprint() // Load refuses such a key
+	}
+	return fmt.Sprintf("%X", sk.PublicKey.Fingerprint)
 }
 
 // ArmoredPrivateKey exports the signing key, decrypted, for rpmsign.

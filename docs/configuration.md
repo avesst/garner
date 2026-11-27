@@ -90,7 +90,9 @@ To rotate keys:
 3. Move the new key first.
 4. Remove the old key.
 
-Promoting a new key re-signs every rpm package from its original.
+Promoting a new key re-signs every rpm package from its original. So does
+adding a new signing subkey to the first key, for example before the old
+one expires.
 
 ## `deb`
 

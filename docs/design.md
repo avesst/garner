@@ -842,7 +842,10 @@ and in CI after a configuration push.
   carry one signature, so promoting a new key re-signs all rpm packages from
   their originals. garner compares the signing key with the one recorded
   after the last re-sign at every start and reload, so a promotion takes
-  effect through a restart too, and an interrupted re-sign is redone.
+  effect through a restart too, and an interrupted re-sign is redone. The
+  signing key is the subkey that makes the signatures, so adding a new
+  signing subkey to the first key, as when one is about to expire, also
+  re-signs them; rpmsign is told to use exactly that subkey.
 - rpm packages are re-signed with `rpmsign --resign` (the container image
   ships `rpm-sign`), which replaces a vendor's signature; `--addsign` keeps
   or refuses it on rpm 6 and EL 10. The original blob is kept, so packages

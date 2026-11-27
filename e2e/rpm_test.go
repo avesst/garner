@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +200,92 @@ func TestRpmResignedAfterKeyPromotionAndRestart(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(e.dir, "pool", "rpm", f)); err != nil {
 			t.Errorf("GC removed %s, which retained snapshots still serve: %v", f, err)
 		}
+	}
+}
+
+// Adding a signing subkey to the signing key, the usual way to roll a
+// subkey that is about to expire, keeps the primary fingerprint but
+// changes the key that signs. The stored rpm packages must be re-signed
+// with the new subkey, or they break once the old one is retired.
+func TestRpmResignedAfterSigningSubkeyAdded(t *testing.T) {
+	gpg, err := exec.LookPath("gpg")
+	if err != nil {
+		t.Skip("gpg not installed")
+	}
+	e := newContainerEnv(t)
+	e.uploadRPM()
+	e.api(http.MethodPost, "/api/v1/publish", nil)
+	oldFiles := e.rpmPoolFiles()
+
+	keyFile := filepath.Join(e.dir, "signing", "key.asc")
+	home := filepath.Join(t.TempDir(), "gnupg")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { exec.Command("gpgconf", "--homedir", home, "--kill", "all").Run() })
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command(gpg, append([]string{"--homedir", home, "--batch",
+			"--pinentry-mode", "loopback", "--passphrase", ""}, args...)...).Output()
+		if err != nil {
+			stderr := ""
+			if ee, ok := err.(*exec.ExitError); ok {
+				stderr = string(ee.Stderr)
+			}
+			t.Fatalf("gpg %v: %v\n%s", args, err, stderr)
+		}
+		return string(out)
+	}
+	run("--import", keyFile)
+	colons := func() [][]string {
+		var recs [][]string
+		for _, line := range strings.Split(run("--with-colons", "--list-keys"), "\n") {
+			recs = append(recs, strings.Split(line, ":"))
+		}
+		return recs
+	}
+	var primary string
+	for _, f := range colons() {
+		if f[0] == "fpr" {
+			primary = f[9]
+			break
+		}
+	}
+	run("--quick-add-key", primary, "rsa2048", "sign", "never")
+	var subID string // the last subkey listed is the one just added
+	for _, f := range colons() {
+		if f[0] == "sub" {
+			subID = strings.ToLower(f[4])
+		}
+	}
+	if err := os.WriteFile(keyFile, []byte(run("--armor", "--export-secret-keys", primary)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	e.restart()
+	if !e.waitLog("re-signed packages", 60*time.Second) {
+		t.Fatal("no re-sign after adding a signing subkey and restarting")
+	}
+	e.api(http.MethodPost, "/api/v1/publish", nil)
+
+	var resigned []string
+	for _, f := range e.rpmPoolFiles() {
+		if !slices.Contains(oldFiles, f) {
+			resigned = append(resigned, f)
+		}
+	}
+	if len(resigned) == 0 {
+		t.Fatal("no re-signed rpm in the pool")
+	}
+	for _, f := range resigned {
+		out, _ := exec.Command("docker", "run", "--rm", "--user", e.user, "--entrypoint", "rpm",
+			"-v", e.dir+":/data:z", imageTag, "-Kv", "/data/pool/rpm/"+f).CombinedOutput()
+		if !strings.Contains(strings.ToLower(string(out)), subID[len(subID)-8:]) {
+			t.Errorf("%s is not signed by the new subkey %s:\n%s", f, subID, out)
+		}
+	}
+	if out, err := e.dnfInstall(); err != nil {
+		t.Fatalf("dnf failed after adding the subkey: %v\n%s", err, out)
 	}
 }
 
