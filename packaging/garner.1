@@ -32,6 +32,9 @@ API commands talk to a running server over HTTP and can run anywhere.
 Flags may appear before or after positional arguments;
 .B \-\-
 ends flag parsing.
+A flag the command does not take is a usage error;
+.B \-h
+after a command lists the flags it takes.
 .SH LOCAL COMMANDS
 .TP
 .B serve \fR[\fB\-\-config \fIFILE\fR]

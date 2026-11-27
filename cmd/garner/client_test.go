@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -91,6 +93,79 @@ func TestSyncIgnoreAgeAndDeferredStatus(t *testing.T) {
 	for _, want := range []string{"org/lib@v3", "2026-11-23T00:00:00.000000Z", "org/app@v1", "only by --ignore-age"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("status output lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// A flag a command does not use is a usage error, not silently dropped.
+func TestUnusedFlagsRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/tokens" {
+			io.WriteString(w, `{"token": {"name": "ci"}, "secret": "s"}`)
+			return
+		}
+		io.WriteString(w, "null")
+	}))
+	defer srv.Close()
+	deb := filepath.Join(t.TempDir(), "a.deb")
+	os.WriteFile(deb, []byte("x"), 0o644)
+
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"upload", "--version", "1", deb}, 2},
+		{[]string{"upload", "--json", deb}, 2},
+		{[]string{"packages", "list", "--suite", "stable"}, 2},
+		{[]string{"sync", "src", "--all"}, 2},
+		{[]string{"owner", "set", "a", "b", "--json"}, 2},
+		{[]string{"snapshot", "rollback", "x", "--json"}, 2},
+		{[]string{"publish", "--name", "x"}, 2},
+		{[]string{"status", "--strict"}, 2},
+		{[]string{"token", "list", "--name", "x"}, 2},
+
+		{[]string{"upload", "--suite", "stable", "--release", "el9", deb}, 0},
+		{[]string{"packages", "list", "--name", "a", "--distribution", "stable", "--all", "--json"}, 0},
+		{[]string{"remove", "a", "--version", "1", "--arch", "amd64", "--distribution", "stable"}, 0},
+		{[]string{"sync", "src", "--ignore-age", "v1", "--repo", "org/a"}, 0},
+		{[]string{"owner", "list", "--json"}, 0},
+		{[]string{"snapshot", "list", "--json"}, 0},
+		{[]string{"conflicts", "list", "--all", "--json"}, 0},
+		{[]string{"status", "--json"}, 0},
+		{[]string{"token", "create", "--name", "ci", "--owner", "team", "--scope", "upload"}, 0},
+		{[]string{"token", "list"}, 0},
+	} {
+		var out, errOut strings.Builder
+		var code int
+		if tc.args[0] == "token" {
+			code = runAPIWith(srv.URL, "token", tc.args[1:], &out, &errOut)
+		} else {
+			code = runAPIWith(srv.URL, tc.args[0], tc.args[1:], &out, &errOut)
+		}
+		if code != tc.code {
+			t.Errorf("garner %s: exit %d, want %d\n%s", strings.Join(tc.args, " "), code, tc.code, errOut.String())
+		}
+	}
+}
+
+// garner token passes only create's flags on to the API in --url mode.
+func TestTokenURLModeFlags(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "null")
+	}))
+	defer srv.Close()
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"list", "--url", srv.URL}, 0},
+		{[]string{"revoke", "ci", "--url", srv.URL}, 0},
+		{[]string{"list", "--url", srv.URL, "--owner", "x"}, 2},
+		{[]string{"revoke", "ci", "--scope", "upload", "--url", srv.URL}, 2},
+	} {
+		var out, errOut strings.Builder
+		if code := runToken(tc.args, &out, &errOut); code != tc.code {
+			t.Errorf("garner token %s: exit %d, want %d\n%s", strings.Join(tc.args, " "), code, tc.code, errOut.String())
 		}
 	}
 }

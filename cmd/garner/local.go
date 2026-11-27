@@ -144,15 +144,22 @@ func runToken(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("token "+sub, stderr)
 	cfgPath := fs.String("config", config.DefaultPath, "configuration file (local mode)")
 	url := fs.String("url", os.Getenv("GARNER_URL"), "garner URL (API mode)")
-	name := fs.String("name", "", "token name (create)")
-	owner := fs.String("owner", "", "owner label (create)")
-	scope := fs.String("scope", "", "comma-separated scopes: upload, publish, admin (create)")
+	name, owner, scope := new(string), new(string), new(string)
+	if sub == "create" {
+		fs.StringVar(name, "name", "", "token name")
+		fs.StringVar(owner, "owner", "", "owner label")
+		fs.StringVar(scope, "scope", "", "comma-separated scopes: upload, publish, admin")
+	}
 	pos, err := parse(fs, args[1:])
 	if err != nil {
 		return 2
 	}
 	if *url != "" {
-		apiArgs := []string{"--name", *name, "--owner", *owner, "--scope", *scope, sub}
+		var apiArgs []string
+		if sub == "create" {
+			apiArgs = []string{"--name", *name, "--owner", *owner, "--scope", *scope}
+		}
+		apiArgs = append(apiArgs, sub)
 		return runAPIWith(*url, "token", append(apiArgs, pos...), stdout, stderr)
 	}
 	cfg, err := config.Load(*cfgPath)

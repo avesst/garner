@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/avesst/garner/internal/server"
 	"github.com/avesst/garner/internal/store"
@@ -116,36 +118,91 @@ func runAPI(cmd string, args []string, stdout, stderr io.Writer) int {
 	return runAPIWith(os.Getenv("GARNER_URL"), cmd, args, stdout, stderr)
 }
 
+// apiFlags are the flags each API command takes besides --url. Only these
+// are defined for the command, so any other flag is a usage error rather
+// than silently ignored.
+var apiFlags = map[string][]string{
+	"upload":    {"suite", "release"},
+	"remove":    {"version", "arch", "distribution", "json"},
+	"owner":     {"json"},
+	"sync":      {"ignore-age", "repo"},
+	"approve":   {"json"},
+	"conflicts": {"all", "json"},
+	"packages":  {"name", "distribution", "all", "json"},
+	"snapshot":  {"json"},
+	"verify":    {"wait", "config-hash", "strict", "json"},
+	"status":    {"json"},
+	"token":     {"name", "owner", "scope"},
+}
+
+// subcommandFlags are flags of apiFlags that only one subcommand takes.
+var subcommandFlags = map[string]map[string]string{
+	"owner":    {"json": "list"},
+	"snapshot": {"json": "list"},
+	"token":    {"name": "create", "owner": "create", "scope": "create"},
+}
+
 func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	fs := newFlags(cmd, stderr)
+	takes := map[string]bool{}
+	for _, f := range apiFlags[cmd] {
+		takes[f] = true
+	}
+	str := func(name, usage string) *string {
+		p := new(string)
+		if takes[name] {
+			fs.StringVar(p, name, "", usage)
+		}
+		return p
+	}
+	boolean := func(name, usage string) *bool {
+		p := new(bool)
+		if takes[name] {
+			fs.BoolVar(p, name, false, usage)
+		}
+		return p
+	}
 	urlFlag := fs.String("url", base, "garner URL (default $GARNER_URL or http://localhost:8080)")
-	suite := fs.String("suite", "", "deb suite (upload)")
-	release := fs.String("release", "", "rpm release (upload)")
-	version := fs.String("version", "", "version (remove)")
-	arch := fs.String("arch", "", "architecture (remove)")
-	dist := fs.String("distribution", "", "distribution (remove, packages list)")
-	name := fs.String("name", "", "name (packages list, token create)")
-	owner := fs.String("owner", "", "owner (token create)")
-	scope := fs.String("scope", "", "scopes (token create)")
-	all := fs.Bool("all", false, "include resolved or removed entries")
-	asJSON := fs.Bool("json", false, "print the raw JSON response")
-	ignoreAge := fs.String("ignore-age", "", "release tag that may skip min_release_age (sync)")
-	repo := fs.String("repo", "", "repository of --ignore-age, for org and group sources (sync)")
-	wait := fs.Duration("wait", 0, "wait up to this long for a pending publish before checking (verify)")
-	configHash := fs.String("config-hash", "", "wait until this configuration (sha256 prefix) is published (verify)")
-	strict := fs.Bool("strict", false, "exit 1 on warnings too (verify)")
+	suite := str("suite", "deb suite")
+	release := str("release", "rpm release")
+	version := str("version", "version, or an image's digest")
+	arch := str("arch", "architecture")
+	dist := str("distribution", "suite or release")
+	name := str("name", "name")
+	owner := str("owner", "owner label")
+	scope := str("scope", "comma-separated scopes: upload, publish, admin")
+	all := boolean("all", "include resolved or removed entries")
+	asJSON := boolean("json", "print the raw JSON response")
+	ignoreAge := str("ignore-age", "release tag that may skip min_release_age")
+	repo := str("repo", "repository of --ignore-age, for org and group sources")
+	wait := new(time.Duration)
+	if takes["wait"] {
+		fs.DurationVar(wait, "wait", 0, "wait up to this long for a pending publish before checking")
+	}
+	configHash := str("config-hash", "wait until this configuration (sha256 prefix) is published")
+	strict := boolean("strict", "exit 1 on warnings too")
 	pos, err := parse(fs, args)
 	if err != nil {
+		return 2
+	}
+	sub := ""
+	if len(pos) > 0 {
+		sub = pos[0]
+	}
+	var misplaced string
+	fs.Visit(func(f *flag.Flag) {
+		if want, ok := subcommandFlags[cmd][f.Name]; ok && sub != want && misplaced == "" {
+			misplaced = fmt.Sprintf("--%s is only for garner %s %s", f.Name, cmd, want)
+		}
+	})
+	if misplaced != "" {
+		fmt.Fprintf(stderr, "garner %s: %s\n", cmd, misplaced)
 		return 2
 	}
 	c, err := newClient(*urlFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "garner: %v\n", err)
 		return 2
-	}
-	sub := ""
-	if len(pos) > 0 {
-		sub = pos[0]
 	}
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "garner %s: %v\n", cmd, err)
