@@ -217,7 +217,7 @@ func TestVerifyWithoutSnapshot(t *testing.T) {
 // them.
 func rpmFixture(t *testing.T) *fixture {
 	t.Helper()
-	for _, tool := range []string{"createrepo_c", "rpmsign", "gpg", "gpgconf"} {
+	for _, tool := range []string{"createrepo_c", "rpmsign", "gpg", "gpg-agent", "gpgconf"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not installed", tool)
 		}

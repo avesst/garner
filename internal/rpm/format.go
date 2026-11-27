@@ -41,7 +41,9 @@ func NewFormat(signer func() signing.Signer) (*Format, error) {
 	for _, t := range []struct {
 		name string
 		dst  *string
-	}{{"createrepo_c", &f.createrepo}, {"rpmsign", &f.rpmsign}, {"gpg", &f.gpg}, {"gpgconf", &f.gpgconf}} {
+	}{{"createrepo_c", &f.createrepo}, {"rpmsign", &f.rpmsign}, {"gpg", &f.gpg}, {"gpgconf", &f.gpgconf},
+		// gpg starts the agent itself, but cannot use a secret key without it.
+		{"gpg-agent", new(string)}} {
 		p, err := exec.LookPath(t.name)
 		if err != nil {
 			missing = append(missing, t.name)

@@ -107,7 +107,8 @@ Present: garner serves an apt repository. Absent: deb is disabled.
 
 Present: garner serves dnf repositories. Absent: rpm is disabled.
 
-rpm also needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`. With
+rpm also needs `createrepo_c`, `rpmsign`, `gpg`, `gpg-agent` and `gpgconf` on
+`PATH`. With
 the section present and a tool missing, `serve` refuses to start and names
 the missing tools.
 

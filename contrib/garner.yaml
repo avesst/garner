@@ -21,8 +21,8 @@ database:
   url: sqlite:///var/lib/garner/garner.db
 
 # Each format section enables that format; remove the one you don't need.
-# rpm also needs createrepo_c, rpmsign, gpg and gpgconf, which the package
-# recommends; without them garner does not start.
+# rpm also needs createrepo_c, rpmsign, gpg, gpg-agent and gpgconf, which
+# the package recommends; without them garner does not start.
 deb:
   architectures: [amd64]
   suites: [stable]

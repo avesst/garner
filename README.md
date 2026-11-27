@@ -241,7 +241,8 @@ sudo dnf install "./garner-${VERSION}-1.x86_64.rpm"
 The packages install the binary, a systemd unit, a system user and an example
 configuration at `/etc/garner/garner.yaml`.
 
-rpm support needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`.
+rpm support needs `createrepo_c`, `rpmsign`, `gpg`, `gpg-agent` and `gpgconf`
+on `PATH`.
 The packages recommend them, so apt and dnf install them by default. If you
 install without recommended packages (`--no-install-recommends`, or dnf with
 `install_weak_deps=False`), install the tools yourself or remove the `rpm`

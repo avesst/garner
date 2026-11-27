@@ -77,6 +77,8 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
 apt-get install -y -q --no-install-recommends /pkg/%s
 dpkg-query -W -f='${Conffiles}\n' garner | grep -q /etc/garner/garner.yaml
+# rpm signing needs the agent, which gpg only recommends through gnupg.
+dpkg-query -W -f='${Recommends}\n' garner | grep -qw gpg-agent
 # Listed, not tested on disk: Ubuntu's image does not unpack man pages.
 dpkg -L garner | grep -qxF /usr/share/man/man1/garner.1.gz
 dpkg -L garner | grep -qxF /usr/share/man/man5/garner.yaml.5.gz

@@ -77,7 +77,7 @@ nfpms:
       postremove: packaging/postremove.sh
     overrides:
       deb:
-        recommends: [createrepo-c, rpm, gpg, gpgconf]
+        recommends: [createrepo-c, rpm, gpg, gpg-agent, gpgconf]
       rpm:
         recommends: [createrepo_c, rpm-sign, gnupg2]
 

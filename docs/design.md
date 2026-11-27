@@ -757,7 +757,8 @@ A native Go implementation can replace it later. garner carries over old
 repodata itself instead of using `createrepo_c --retain-old-md`, because each
 snapshot is rendered into a fresh directory.
 
-rpm support needs `createrepo_c`, `rpmsign`, `gpg` and `gpgconf` on `PATH`
+rpm support needs `createrepo_c`, `rpmsign`, `gpg`, `gpg-agent` and `gpgconf`
+on `PATH`
 (the container image ships them). With `rpm:` configured and a tool
 missing, `serve` refuses to start and says which tools are missing.
 

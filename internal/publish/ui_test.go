@@ -127,7 +127,7 @@ func (l *ui) read(name string) string {
 // With GARNER_UI_SAMPLE set to a directory, the pages are copied
 // there for a look.
 func TestUIByEcosystem(t *testing.T) {
-	for _, tool := range []string{"createrepo_c", "rpmsign", "gpg", "gpgconf"} {
+	for _, tool := range []string{"createrepo_c", "rpmsign", "gpg", "gpg-agent", "gpgconf"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not installed", tool)
 		}

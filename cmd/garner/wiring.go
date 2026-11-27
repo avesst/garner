@@ -18,8 +18,8 @@ import (
 )
 
 // formats builds a format for each configured section. A configured rpm
-// needs createrepo_c, rpmsign, gpg and gpgconf; without them garner does
-// not start. signer is resolved after the app is opened.
+// needs createrepo_c, rpmsign, gpg, gpg-agent and gpgconf; without them
+// garner does not start. signer is resolved after the app is opened.
 func formats(signer func() signing.Signer) app.FormatsFunc {
 	return func(cfg *config.Config) ([]format.Format, error) {
 		var out []format.Format
