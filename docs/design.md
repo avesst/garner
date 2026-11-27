@@ -1,7 +1,11 @@
 # garner design
 
-Status: MVP implemented (see `plan.md`). Decisions recorded 2026-10-13,
-updated 2026-11-14 with choices made during implementation.
+Status: 0.2.2 released 2026-11-26. Built: the MVP (0.1.0), and since then
+OCI images (section 19), repository verification (section 9) and
+`min_release_age` (section 7). Not built: multiple nodes (section 18),
+upstream signatures (section 20) and the rest of section 15, Later.
+`plan.md` records what is built and verified. Decisions recorded
+2026-10-13, updated through 2026-11-27 to match the code.
 
 ## 1. Purpose
 
@@ -17,9 +21,9 @@ served as a registry (section 19). It accepts packages from two places:
 Images arrive the same two ways: pushed with `docker push`, and synced from
 registries such as ghcr.io and Docker Hub.
 
-The MVP is one process with SQLite and local disk, for a homelab and for an
-internal enterprise repository behind a reverse proxy. Multiple nodes on
-PostgreSQL come later (section 18).
+garner is one process with SQLite and local disk, for a homelab and for an
+internal enterprise repository behind a reverse proxy. Multiple nodes come
+later (section 18).
 
 ### Goals
 
@@ -28,9 +32,8 @@ PostgreSQL come later (section 18).
   verification.
 - Declarative configuration that fits a GitOps workflow.
 - Atomic publishing: clients never see a half-written repository.
-- Later: a path from SQLite and one node to PostgreSQL and multiple nodes
-  without reinstalling (section 18). The MVP keeps this possible but does not
-  build it.
+- Later: a path from one node to multiple nodes without reinstalling
+  (section 18). The code keeps this possible but does not build it.
 
 ### Non-goals
 
@@ -55,7 +58,8 @@ PostgreSQL come later (section 18).
 ## 3. Architecture
 
 ```
-            uploads (API/CLI)        forge sync
+         uploads (API/CLI)          forge sync
+         image push (/v2/)          registry sync
                     \                 /
                      v               v
                  +-----------------------+
@@ -73,7 +77,7 @@ PostgreSQL come later (section 18).
                             v
                  public tree on disk  --->  built-in HTTP server
                                        --->  or nginx / proxy serving the
-                                             same directory
+                                             same directory (not /v2/)
 ```
 
 ### Process model
@@ -95,7 +99,7 @@ PostgreSQL come later (section 18).
 - `public/` is plain files. When the reverse proxy serves it directly from
   disk (section 4), apt and dnf clients keep working while garner is stopped
   or restarting; only uploads and sync pause. With the built-in server, reads
-  stop too.
+  stop too. Image pulls go through garner either way (section 19).
 
 Multiple nodes and separate roles are later extensions (section 18).
 
@@ -127,7 +131,7 @@ The file name prefix of the generated client files (`garner`) comes from
 
 - One apt archive under `/deb`.
 - Suites come from configuration; the default is only `stable`.
-- One component, `main`, in the MVP.
+- One component, `main`; more are in section 15, Later.
 - `dists/<suite>/InRelease`, `Release`, `Release.gpg`,
   `main/binary-<arch>/Packages{,.gz,.xz}`, with `Acquire-By-Hash: yes` and
   `by-hash/SHA256/` directories. Each snapshot's `by-hash/` also holds the
@@ -214,9 +218,12 @@ gpgkey=https://repo.example.com/key.asc
                                       re-signed rpm variants
   pool/deb/main/...                   hardlinks into blobs/
   pool/rpm/...                        hardlinks into blobs/
+  pool/oci/sha256:<hex>               hardlinks into blobs/ (section 19)
+  uploads/<id>                        image blob uploads in progress
   snapshots/<id>/                     metadata only:
     deb/dists/...
     rpm/<rel>/<arch>/repodata/...
+    oci/v2/<name>/...                 manifests and tag lists
     index.html, key.asc, key.gpg, garner.sources, garner.repo
   public/                             the served tree
     current   -> ../snapshots/<id>    the only link a publish changes
@@ -224,6 +231,7 @@ gpgkey=https://repo.example.com/key.asc
     deb/pool  -> ../../pool/deb
     rpm/<rel>/<arch>/repodata -> ../../../current/rpm/<rel>/<arch>/repodata
     rpm/<rel>/<arch>/pool     -> ../../../../pool/rpm
+    v2        -> current/oci/v2
     snapshots -> ../snapshots
     index.html -> current/index.html  (likewise key.asc, key.gpg and the
                                       client files)
@@ -234,7 +242,7 @@ falls back to copying.
 
 `public/current` is the only symlink whose target changes. Every other link
 in `public/` has a fixed target through `current`, so one `rename(2)` switches
-deb, rpm, the UI, the keys and the client files together, and a
+deb, rpm, images, the UI, the keys and the client files together, and a
 client never sees two snapshots at once. A publish creates fixed links that
 are missing (a new suite, release or architecture) and removes those no
 longer configured; it never retargets them.
@@ -382,7 +390,10 @@ sources:
 Every suite or release referenced in `assets` must exist in `deb.suites` or
 `rpm.releases`. Validation rejects unknown ones.
 
-A format is enabled by its section being present (`deb:`, `rpm:`); an empty
+Images add `oci:` and `registries:`, and registry sources; section 19
+shows them.
+
+A format is enabled by its section being present (`deb:`, `rpm:`, `oci:`); an empty
 section uses the defaults, and at least one format is required. Adding or
 removing a section takes a restart, because formats are built once at
 start. A removed section keeps the format's packages stored but unserved.
@@ -392,30 +403,31 @@ start. A removed section keeps the format's packages stored but unserved.
 The schema is portable across SQLite and PostgreSQL: no `JSONB`, no arrays, no
 dialect-specific functions in the core schema. Structured fields are `TEXT`
 holding JSON, read only by the application. Migrations use `pressly/goose`.
-The MVP supports SQLite only. To keep the schema portable, CI also applies all
+garner runs on SQLite only. To keep the schema portable, CI also applies all
 migrations to PostgreSQL; the test suite itself runs on SQLite.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `repositories` | `id`, `name`, `signed_with` | One row (`default`) in the MVP. `signed_with` is the fingerprint of the key packages were last re-signed with. Every other table references it, so named repositories can be added without a data migration. |
+| `repositories` | `id`, `name`, `signed_with` | One row (`default`) so far. `signed_with` is the fingerprint of the key packages were last re-signed with. Every other table references it, so named repositories can be added without a data migration. |
 | `blobs` | `sha256` PK, `size`, `created_at` | Originals and re-signed variants. |
 | `packages` | `id`, `repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `blob_sha256`, `signed_blob_sha256`, `metadata` (TEXT/JSON), `origin` (`upload`/`source`), `origin_ref`, `verify_status`, `pinned`, `created_at` | Unique on (`repository_id`, `format`, `name`, `epoch`, `version`, `release`, `arch`, `distribution`) through `placements`. |
 | `placements` | `package_id`, `distribution`, `state` (`active`/`held`/`removed`), `owner_conflict`, `created_at` | Where a package is published. `owner_conflict` marks a hold whose deliverer did not own the name (section 8). |
-| `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`, the only one in the MVP (section 17). |
+| `name_owners` | `repository_id`, `namespace`, `name` PK, `owner`, `source` (`first`/`config`/`manual`), `assigned_at` | One owner per name within a namespace. deb and rpm share the namespace `os`; images use `oci` (section 17). |
 | `conflicts` | `id`, `kind`, `package_ref`, `detail`, `created_at`, `resolved_at` | Ownership, content, asset-mapping, checksum and download conflicts. Only ownership conflicts are open: a delivery held for a decision, resolved when an approve or remove leaves none of its placements held. The others record an asset sync skipped for good (its release is processed), so they are written resolved, as history; `garner_conflicts_total{kind}` counts every kind as events. Rows are never deleted. |
 | `source_state` | `source` PK, `last_run`, `last_success`, `last_error`, `etags` (TEXT/JSON) | |
 | `source_repos` | `source`, `repo`, `etag`, `last_seen` | Cached org/group listing. |
-| `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at` | Prevents reprocessing. |
-| `snapshots` | `id`, `created_at`, `config_hash`, `is_current`, `replaced_at` | `replaced_at`: when the snapshot stopped being current, for `gc_grace`. |
+| `seen_releases` | `source`, `repo`, `tag`, `release_id`, `processed_at`, `published_at` | Prevents reprocessing. `published_at`: the release's publish time, for finding later releases. |
+| `pending_releases` | `source`, `repo`, `release_id` PK, `published_at` | Releases deferred by `min_release_age` or left by a failed download, retried on later runs. |
+| `release_age_overrides` | `source`, `repo`, `tag` PK, `created_at`, `created_by` | `--ignore-age` overrides, with the token's name. |
+| `snapshots` | `id`, `created_at`, `config_hash`, `is_current`, `replaced_at`, `inputs` | `replaced_at`: when the snapshot stopped being current, for `gc_grace`. `inputs`: the digest a start compares (section 9). |
 | `snapshot_packages` | `snapshot_id`, `package_id`, `distribution`, `served_sha256` | Drives GC reachability. `served_sha256` is the blob the snapshot serves the package from, kept after a re-sign replaces it. |
 | `snapshot_formats` | `snapshot_id`, `format` | The formats a snapshot rendered. A rollback changes placements only for these. |
 | `tokens` | `id`, `name`, `owner`, `scopes`, `hash`, `created_at`, `last_used_at`, `revoked_at` | sha256 of a 256-bit random secret. |
-| `events` | `id`, `at`, `actor`, `action`, `detail` | Audit log. Later, not in the MVP (section 15). |
 | `package_blobs` | `package_id`, `sha256` | Further blobs a package owns, such as an image's layers (section 19). |
 | `tags` | `repository_id`, `format`, `name`, `tag` PK, `package_id`, `updated_at`, `updated_by` | Mutable labels on packages: image tags. |
 | `snapshot_tags` | `snapshot_id`, `format`, `name`, `tag`, `package_id` | The tags a snapshot served, for rollback. |
 | `staged_blobs` | `sha256` PK, `expires_at` | Blobs a push or sync stored before a package references them; GC keeps them until `expires_at`. |
-| `uploads` | `id`, `format`, `name`, `size`, `created_at`, `updated_at` | Blob upload sessions of pushes in progress. |
+| `uploads` | `id`, `repository_id`, `format`, `name`, `size`, `created_at`, `updated_at` | Blob upload sessions of pushes in progress. |
 | `source_tags` | `source`, `repo`, `tag` PK, `digest`, `applied_at` | The upstream digest a registry source's tag was last applied from. |
 | `source_tag_candidates` | `source`, `repo`, `tag`, `digest` PK, `first_seen` | Digests seen under a tag, for `min_release_age`. |
 
@@ -752,8 +764,9 @@ Snapshots are immutable, so history is only ever added to a new snapshot.
 This is why a rollback writes a new snapshot (see below) instead of
 repointing `public/` to the old one.
 
-rpm repodata generation uses `createrepo_c` in the MVP, behind an interface.
-A native Go implementation can replace it later. garner carries over old
+rpm repodata generation runs `createrepo_c` from the rpm format's
+`Render`; nothing outside `internal/rpm` knows about it, so a native Go
+implementation can replace it later. garner carries over old
 repodata itself instead of using `createrepo_c --retain-old-md`, because each
 snapshot is rendered into a fresh directory.
 
@@ -888,15 +901,21 @@ and in CI after a configuration push.
 
 - A local filesystem path. Atomic swaps use `rename(2)`, and writes are
   fsynced before the rename.
-- All storage access goes through an interface (blobs, pool, snapshots,
-  pointers). S3-compatible storage is planned after the MVP, with
-  `garner storage migrate`.
+- Storage is the local filesystem, used directly: the blob store
+  (`internal/blob`) hands out paths and open files, and publish, GC,
+  verify and the OCI upload sessions work on directories under
+  `storage.path`. There is no storage interface yet. S3-compatible
+  storage, with `garner storage migrate`, is still planned (section 15)
+  and would start by putting one in front of the blob store and the
+  pool; snapshots and `public/` stay files, since the swap is a
+  `rename(2)`.
 
 ### Database
 
 - SQLite (`modernc.org/sqlite`, no cgo), with the database on local disk,
   never on NFS.
-- PostgreSQL comes with multiple nodes (section 18).
+- The schema stays portable to PostgreSQL (section 6), so that multiple
+  nodes can use it; section 18 weighs it against replicated SQLite.
 
 ## 13. Observability
 
@@ -910,6 +929,7 @@ and in CI after a configuration push.
   - `garner_sync_releases_deferred{source}`
   - `garner_forge_ratelimit_remaining{forge}`
   - `garner_publish_duration_seconds`
+  - `garner_publish_errors_total`
   - `garner_publish_last_success_timestamp_seconds`
   - `garner_packages{format,distribution,arch}`
   - `garner_uploads_total{result}`
@@ -941,7 +961,7 @@ the configuration and database are reachable. The others call the API with
 | `reload` | API | admin |
 | `token create --name --owner --scope` / `list` / `revoke` | local or API | admin |
 | `upload FILES` | API | upload |
-| `remove NAME [--version] [--arch]` | API | admin |
+| `remove NAME [--version] [--arch] [--distribution]` | API | admin |
 | `owner list` / `owner set NAME OWNER` | API | admin |
 | `sync SOURCE` | API | publish |
 | `sync SOURCE --ignore-age TAG [--repo REPO]` | API | publish and admin |
@@ -952,6 +972,7 @@ the configuration and database are reachable. The others call the API with
 | `gc` | API | admin |
 | `verify` | API | publish |
 | `status` | API | none |
+| `version` | local | |
 
 ### HTTP API (v1)
 
@@ -973,6 +994,9 @@ the configuration and database are reachable. The others call the API with
 | `POST /api/v1/publish` | publish |
 | `POST /api/v1/verify` | publish |
 | `POST/GET/DELETE /api/v1/tokens` | admin |
+
+The OCI registry at `/v2/`, with its token endpoint `/v2/token`, is
+described in section 19.
 
 ### UI
 
@@ -1029,9 +1053,20 @@ There are no download statistics, no login and no write actions.
 5. Metrics, health endpoints, container image, static binary, systemd unit
    example.
 
+All five shipped in 0.1.0, with `.deb` and `.rpm` packages of garner.
+
+### Built after the MVP
+
+- OCI images: push, pull and registry sync (section 19), in 0.2.0.
+- `garner verify` (section 9).
+- `min_release_age` and `--ignore-age` for sync (section 7).
+- The UI by ecosystem (section 14).
+- Test clients on every supported release of each distribution
+  (section 4, Supported clients).
+
 ### Later
 
-- PostgreSQL, multiple nodes and `db migrate` (section 18).
+- Multiple nodes (section 18).
 - S3-compatible storage and `storage migrate`.
 - Webhooks.
 - Upstream signatures: OpenPGP, Sigstore and GitHub attestations (section 20).
@@ -1041,7 +1076,7 @@ There are no download statistics, no login and no write actions.
 - Built-in git config fetch.
 - Helm chart.
 - Further package formats, for example npm, PyPI and Ansible collections
-  (section 17). OCI images are designed in section 19.
+  (section 17).
 - Exclusions in `owns:` (`["tool-*", "!tool-cli"]`), so one source can
   reserve a pattern while another owns an exception. The overlap check
   (section 8) takes exclusions into account.
@@ -1051,26 +1086,28 @@ There are no download statistics, no login and no write actions.
 - Separate serve/worker roles.
 - Audit log (`events` table): who uploaded, removed or transferred
   ownership of what.
-- Test clients on the previous release of each distribution as well
-  (Ubuntu 24.04 LTS, EL 9), since enterprise fleets lag the latest release.
 - deb components beyond `main`, mapped per source or asset rule. Adding
   components does not affect clients that list only `main`.
 
 ## 16. Open questions
 
-- **License:** deliberately undecided until release is decided. Chosen
-  dependencies (`modernc.org/sqlite`, `ProtonMail/go-crypto`, `goose`) are
-  BSD/MIT. `rpmsign` and `createrepo_c` run as external processes.
+- **Multi-node database:** PostgreSQL, as section 18 designs, or a
+  replicated SQLite. Undecided; nothing is built.
+
+Settled: the license is 0BSD (`LICENSE`). Dependencies
+(`modernc.org/sqlite`, `ProtonMail/go-crypto`, `goose`) are BSD/MIT;
+`rpmsign` and `createrepo_c` run as external processes.
 
 ## 17. Future package formats
 
-More package formats will be added later. The set is open: the formats below
-are examples, not a list to design against. None is in the MVP, but the MVP
-should not make any new format expensive to add.
+More package formats will be added. The set is open: the formats below
+are examples, not a list to design against. The core should not make any
+new format expensive to add. OCI was the first after deb and rpm, and the
+one that tested these constraints hardest (section 19).
 
 ### Examples, and how they differ from deb and rpm
 
-The examples show how wide the range is. The MVP's abstractions must cover all
+The examples show how wide the range is. The core's abstractions must cover all
 of them, not just the formats that resemble deb and rpm.
 
 | Format | Client protocol | Fits static snapshots | Repository signing | Version order |
@@ -1078,9 +1115,9 @@ of them, not just the formats that resemble deb and rpm.
 | npm | Registry JSON (packuments); `npm publish` is a JSON PUT | Mostly: packuments and tarballs are files, but scoped names (`@scope%2fname`) need care behind nginx | None; npm uses provenance and registry signatures instead | semver; dist-tags |
 | PyPI | Simple API (PEP 503/691); `twine upload` uses the legacy multipart API | Yes | None; PEP 740 attestations | PEP 440 |
 | Ansible | Galaxy API v3 | Possibly, if the API responses are pre-rendered; unverified | None | semver |
-| OCI | Distribution spec, `/v2/` at the host root | Pulls yes, with `Content-Type` set per manifest type; push needs a live API (section 19) | Separate artifacts (cosign, notation) | Tags are unordered |
+| OCI (built, section 19) | Distribution spec, `/v2/` at the host root | Pulls yes, with `Content-Type` set per manifest type; push needs a live API | Separate artifacts (cosign, notation) | Tags are unordered |
 
-### Constraints on the MVP
+### Constraints on the core
 
 - **Format interface.** deb and rpm are implemented behind one interface, and
   the core never branches on a format name. A format provides detection and
@@ -1091,12 +1128,13 @@ of them, not just the formats that resemble deb and rpm.
 - **Data model.** The generic identity of a package is (format, name,
   version). `epoch`, `release`, `arch` and `distribution` are format-specific;
   other formats store their own fields in `metadata`. No table or column is
-  named after a specific format.
+  named after a specific format. Mutable labels (image tags, npm
+  dist-tags) use `tags`; a package with several files uses
+  `package_blobs`.
 - **Ownership namespaces.** Names are owned per namespace, because the same
   name in two ecosystems usually means unrelated projects. Each format
   declares its namespace; formats that share a name space share one, as deb
-  and rpm share `os`. The MVP adds the `namespace` column now, always `os`,
-  so no data migration is needed later.
+  and rpm share `os`; OCI uses `oci`.
 - **URL space.** Each format is served under its own prefix, named after the
   format (`/deb/`, `/rpm/`, and so on). Some clients require fixed paths at
   the host root (OCI requires `/v2/`); a format declares such paths, and the
@@ -1106,8 +1144,8 @@ of them, not just the formats that resemble deb and rpm.
   format, as `deb:` and `rpm:` do, and the section's presence enables the
   format. Validation is delegated to the format.
 - **Serving model.** A format either renders static files into snapshots (deb,
-  rpm, and probably PyPI) or needs live endpoints served by garner (OCI).
-  Both are supported by the interface. A live format cannot be served by
+  rpm, and probably PyPI) or needs live endpoints served by garner (OCI
+  push). Both are supported by the interface. A live format cannot be served by
   the proxy from `public/` alone, which the deployment docs must state.
 - **Trust.** "Clients trust exactly one key" holds only for formats with
   repository signing, such as deb and rpm. Others rely on TLS plus the
@@ -1120,19 +1158,18 @@ of them, not just the formats that resemble deb and rpm.
 - **Sync.** Forge releases rarely carry most of these formats; forge package
   registries (GitHub Packages, GitLab Package Registry) are the likelier
   source. Asset rules will need a format-aware target in place of
-  `suite`/`release`.
-
-Of the examples, OCI fits the current design least: push needs live
-endpoints, and an image is many shared blobs under mutable tags. Section 19
-designs it.
+  `suite`/`release`. OCI added a second kind of source, the registry
+  (`RegistryFormat`); a format synced from somewhere other than forge
+  releases follows that pattern.
 
 ## 18. Multiple nodes (later)
 
-Not in the MVP. When the reverse proxy serves `public/` from disk, reads
-stay available while garner is down (section 3), so multiple nodes mainly
-protect uploads and sync. Deployments using the built-in server get no read
-availability from that setup. This
-section keeps the earlier design so the MVP does not close it off.
+Not built. When the reverse proxy serves `public/` from disk, deb and rpm
+reads stay available while garner is down (section 3), so multiple nodes
+mainly protect uploads, sync and image pulls, which go through garner.
+Deployments using the built-in server get no read availability from that
+setup. This section keeps the design so the code does not close it off.
+Whether its database is PostgreSQL is open (section 16).
 
 ### Design
 
@@ -1176,21 +1213,32 @@ The SQLite file is left untouched; rollback is pointing the configuration back
 at it. Migration is one-way. Files in storage are not touched. While garner
 is stopped, a proxy serving `public/` from disk keeps serving it.
 
-### Constraints on the MVP
+### Constraints on the single-node code
 
 - **Portable schema.** No SQLite-only types or functions (section 6). CI
   applies every migration to PostgreSQL.
-- **Narrow interfaces** for the database, locks and publish requests. The MVP
-  implements them in-process; PostgreSQL implementations slot in behind the
-  same calls. Code never relies on a Go mutex or channel where a database lock
-  or notification will later be needed.
+- **Narrow interfaces** for the database, locks and publish requests.
+  Today these are narrow calls on concrete types, implemented in-process,
+  not Go interfaces: publish requests go through `publish.Scheduler.Request`
+  (a flag and a channel), one publish at a time is a `sync.Mutex` in
+  `publish.Publisher`, and the single process is guaranteed by the `flock`
+  on `<db>.lock`. A multi-node backend replaces those few calls. New code
+  never adds a Go mutex or channel where a database lock or notification
+  will later be needed.
+- **Known in-process state** to move into the database with this work:
+  a registry's or forge's `max_concurrent` (a semaphore per process), the
+  registry client cache (a Go mutex), and the syncer's in-memory list of
+  deferred releases, which `--ignore-age` reads for a re-created tag
+  (`plan.md`). Image upload sessions are already shared: a row in
+  `uploads` and a file in storage, and `/v2/` tokens carry credentials
+  that any node can check.
 - **One swap point.** Publish ends in a single `rename(2)` of
   `public/current` (section 9), which is the one place a fencing check will
   guard.
 
 ## 19. OCI images (after 0.1.0)
 
-Built after 0.1.0 (`internal/oci`); `docs/plan.md` records what is
+Built in 0.2.0 (`internal/oci`); `docs/plan.md` records what is
 verified. garner stores container images (OCI and Docker schema 2
 manifests and indexes), accepts them by `docker push` and `podman push`,
 syncs selected images from other registries, and serves pulls from the
@@ -1207,12 +1255,12 @@ images pushed to garner or named by a source are stored (section 1).
 - Ingest records an image through `Record`, which takes a package whose
   blobs are stored already: the content check, ownership, placement and
   the publish request are those of an upload.
-- Tags are mutable labels on a package, in a new table `tags`
+- Tags are mutable labels on a package, in the table `tags`
   (`repository_id`, `format`, `name`, `tag`, `package_id`, `updated_at`,
   `updated_by`). npm dist-tags would use the same table. A snapshot records
   the tags it served in `snapshot_tags`, so a rollback restores them.
 - A package owns several blobs: its manifest, its config and layers, and
-  for an index its child manifests and their blobs. A new table
+  for an index its child manifests and their blobs. The table
   `package_blobs` (`package_id`, `sha256`) lists them, and GC and verify
   follow it. `blob_sha256` is the manifest itself. deb and rpm packages
   have no rows there.
@@ -1314,7 +1362,7 @@ garner implements the push half of the OCI distribution spec.
   `?mount=<digest>&from=<name>`. `PATCH` appends a chunk, which must start
   where the last ended (`416` otherwise). `PUT ?digest=` finishes, `GET`
   reports progress, `DELETE` cancels.
-- A session is a row in a new table `uploads` (`id`, `repository_id`,
+- A session is a row in the table `uploads` (`id`, `repository_id`,
   `format`, `name`, `size`, `created_at`, `updated_at`) and a file under
   `uploads/<id>` in storage, so another node can continue it (section 18).
   On finish the digest is checked and the file stored as a blob (section 7,
@@ -1486,7 +1534,7 @@ sources:
 
 ## 20. Upstream signatures (later)
 
-Not built yet. Today a synced asset is checked against a checksum (section
+Designed, not built. Today a synced asset is checked against a checksum (section
 7, Verification), which catches corruption but not a replaced release: whoever
 can change an asset can change its checksum file too. This section designs
 checking that a release was signed by a signer the source trusts. It
