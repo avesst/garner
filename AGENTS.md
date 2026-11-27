@@ -21,6 +21,12 @@ and `docs/dev/plan.md` tracks what is built and what is not yet verified.
 
 These come from `docs/dev/design.md` sections 17 and 18, which explain them.
 
+- Every decision keeps the planned work open: the formats in section 17,
+  multiple nodes in section 18 and the Later list in section 15. Before
+  changing the schema, an interface, the URL space, signing,
+  configuration, the API or the CLI, check it against that work, and name
+  any item the change would make harder to add, with the reason.
+
 - The core is format-agnostic: deb and rpm sit behind one format interface,
   and code outside `internal/deb` and `internal/rpm` never branches on a
   format name. No table or column is named after a format.
