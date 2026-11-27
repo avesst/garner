@@ -132,7 +132,8 @@ func TestUnusedFlagsRejected(t *testing.T) {
 		{[]string{"snapshot", "list", "--json"}, 0},
 		{[]string{"conflicts", "list", "--all", "--json"}, 0},
 		{[]string{"status", "--json"}, 0},
-		{[]string{"token", "create", "--name", "ci", "--owner", "team", "--scope", "upload"}, 0},
+		{[]string{"token", "create", "--name", "ci", "--owner", "team", "--scopes", "upload"}, 0},
+		{[]string{"token", "create", "--name", "ci", "--owner", "team", "--scope", "upload"}, 2},
 		{[]string{"token", "list"}, 0},
 	} {
 		var out, errOut strings.Builder
@@ -161,7 +162,7 @@ func TestTokenURLModeFlags(t *testing.T) {
 		{[]string{"list", "--url", srv.URL}, 0},
 		{[]string{"revoke", "ci", "--url", srv.URL}, 0},
 		{[]string{"list", "--url", srv.URL, "--owner", "x"}, 2},
-		{[]string{"revoke", "ci", "--scope", "upload", "--url", srv.URL}, 2},
+		{[]string{"revoke", "ci", "--scopes", "upload", "--url", srv.URL}, 2},
 	} {
 		var out, errOut strings.Builder
 		if code := runToken(tc.args, &out, &errOut); code != tc.code {

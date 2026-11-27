@@ -16,7 +16,7 @@ only. The owner label decides who owns the package names it uploads:
 ```sh
 export GARNER_URL=https://pkg.example.com
 GARNER_TOKEN="admin:<secret>" garner token create \
-    --name ci-tool --owner team-platform --scope upload
+    --name ci-tool --owner team-platform --scopes upload
 ```
 
 It prints `GARNER_TOKEN=ci-tool:<secret>`, once. Store that value as a

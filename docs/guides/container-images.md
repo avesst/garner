@@ -65,7 +65,7 @@ pushes first:
 
 ```sh
 GARNER_TOKEN="admin:<secret>" garner token create \
-    --name ci-tool --owner team-platform --scope upload
+    --name ci-tool --owner team-platform --scopes upload
 ```
 
 In the pipeline, log in with the token's name as the user and its secret

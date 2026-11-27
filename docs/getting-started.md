@@ -87,7 +87,7 @@ On the garner host, the API is reachable over loopback without HTTPS:
 
 ```sh
 export GARNER_TOKEN="admin:<secret from step 3>"
-garner token create --url http://localhost:8080 --name tutorial --owner me --scope upload
+garner token create --url http://localhost:8080 --name tutorial --owner me --scopes upload
 ```
 
 It prints the new token as a `GARNER_TOKEN=tutorial:...` line. Use it to

@@ -137,18 +137,18 @@ func openDB(cfg *config.Config) (*db.DB, error) {
 // runToken manages tokens locally, or through the API with --url.
 func runToken(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: garner token create --name N --owner O --scope S[,S] | list | revoke NAME  [--url URL | --config FILE]")
+		fmt.Fprintln(stderr, "Usage: garner token create --name N --owner O --scopes S[,S] | list | revoke NAME  [--url URL | --config FILE]")
 		return 2
 	}
 	sub := args[0]
 	fs := newFlags("token "+sub, stderr)
 	cfgPath := fs.String("config", config.DefaultPath, "configuration file (local mode)")
 	url := fs.String("url", os.Getenv("GARNER_URL"), "garner URL (API mode)")
-	name, owner, scope := new(string), new(string), new(string)
+	name, owner, scopes := new(string), new(string), new(string)
 	if sub == "create" {
 		fs.StringVar(name, "name", "", "token name")
 		fs.StringVar(owner, "owner", "", "owner label")
-		fs.StringVar(scope, "scope", "", "comma-separated scopes: upload, publish, admin")
+		fs.StringVar(scopes, "scopes", "", "comma-separated scopes: upload, publish, admin")
 	}
 	pos, err := parse(fs, args[1:])
 	if err != nil {
@@ -157,7 +157,7 @@ func runToken(args []string, stdout, stderr io.Writer) int {
 	if *url != "" {
 		var apiArgs []string
 		if sub == "create" {
-			apiArgs = []string{"--name", *name, "--owner", *owner, "--scope", *scope}
+			apiArgs = []string{"--name", *name, "--owner", *owner, "--scopes", *scopes}
 		}
 		apiArgs = append(apiArgs, sub)
 		return runAPIWith(*url, "token", append(apiArgs, pos...), stdout, stderr)
@@ -177,7 +177,7 @@ func runToken(args []string, stdout, stderr io.Writer) int {
 	ctx := context.Background()
 	switch sub {
 	case "create":
-		secret, t, err := auth.CreateToken(ctx, &st.Queries, *name, *owner, splitList(*scope))
+		secret, t, err := auth.CreateToken(ctx, &st.Queries, *name, *owner, splitList(*scopes))
 		if err != nil {
 			fmt.Fprintf(stderr, "garner: %v\n", err)
 			return 1

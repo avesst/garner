@@ -29,7 +29,7 @@ name.
 
 `garner init` prints an initial token named `admin`, with owner `admin`
 and all three scopes. Create others with
-`garner token create --name <name> --owner <label> --scope <scopes>`,
+`garner token create --name <name> --owner <label> --scopes <scopes>`,
 list them with `garner token list`, and revoke one with
 `garner token revoke <name>`. The secret is shown once; garner stores only
 its sha256. These commands work on the database directly when garner is

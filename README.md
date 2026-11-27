@@ -43,7 +43,7 @@ admin token that `garner init` prints:
 ```sh
 export GARNER_URL=https://pkg.example.com
 GARNER_TOKEN="admin:<secret>" garner token create --url "$GARNER_URL" \
-    --name ci-mytool --owner team-a --scope upload
+    --name ci-mytool --owner team-a --scopes upload
 ```
 
 Then, in the pipeline:

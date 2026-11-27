@@ -132,14 +132,14 @@ var apiFlags = map[string][]string{
 	"snapshot":  {"json"},
 	"verify":    {"wait", "config-hash", "strict", "json"},
 	"status":    {"json"},
-	"token":     {"name", "owner", "scope"},
+	"token":     {"name", "owner", "scopes"},
 }
 
 // subcommandFlags are flags of apiFlags that only one subcommand takes.
 var subcommandFlags = map[string]map[string]string{
 	"owner":    {"json": "list"},
 	"snapshot": {"json": "list"},
-	"token":    {"name": "create", "owner": "create", "scope": "create"},
+	"token":    {"name": "create", "owner": "create", "scopes": "create"},
 }
 
 func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
@@ -170,7 +170,7 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 	dist := str("distribution", "suite or release")
 	name := str("name", "name")
 	owner := str("owner", "owner label")
-	scope := str("scope", "comma-separated scopes: upload, publish, admin")
+	scopes := str("scopes", "comma-separated scopes: upload, publish, admin")
 	all := boolean("all", "include resolved or removed entries")
 	asJSON := boolean("json", "print the raw JSON response")
 	ignoreAge := str("ignore-age", "release tag that may skip min_release_age")
@@ -442,7 +442,7 @@ func runAPIWith(base, cmd string, args []string, stdout, stderr io.Writer) int {
 		case "create":
 			var out server.CreateTokenResponse
 			if err := c.do(http.MethodPost, "/api/v1/tokens", nil, jsonBody(server.CreateTokenRequest{
-				Name: *name, Owner: *owner, Scopes: splitList(*scope)}), &out); err != nil {
+				Name: *name, Owner: *owner, Scopes: splitList(*scopes)}), &out); err != nil {
 				return fail(err)
 			}
 			fmt.Fprintf(stdout, "token %s (owner %s, scopes %s), shown once:\n  GARNER_TOKEN=%s:%s\n",
