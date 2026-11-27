@@ -215,7 +215,7 @@ one image of a registry; see [Registry sources](#registry-sources).
 | `forge` | forge name, **required** | none | The `forges[].name` to sync from. |
 | `repo` | `owner/name` | empty | A single repository. GitLab paths may have more parts (`group/sub/project`). |
 | `org` | name | empty | A GitHub or Forgejo organization; every repository in it is synced. New repositories are picked up on the next poll. |
-| `group` | path | empty | A GitLab group, synced like `org`. |
+| `group` | path | empty | A GitLab group, synced like `org`. Projects shared into the group from other namespaces are not synced. |
 | `owns` | list of globs | `[]` | Package names this source reserves. Only this source may deliver them, also against uploads. Globs of two sources must not be able to match the same name; validation names an example if they do. |
 | `assets` | list of rules | `[]` | Which deb suite or rpm release each asset goes to; see [Asset rules](#asset-rules). |
 | `include` | list of globs | `[]` | For `org` and `group` sources only: sync only repositories whose name (without the owner) matches one of these. Empty means all. |

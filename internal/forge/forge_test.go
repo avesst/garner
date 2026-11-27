@@ -202,7 +202,15 @@ func TestGitLabEscapesPathsAndExternalLinks(t *testing.T) {
 				http.Error(w, "want subgroups", 400)
 				return
 			}
-			io.WriteString(w, `[{"path_with_namespace": "platform/tools/cli", "forked_from_project": {"id": 1}}]`)
+			if r.URL.Query().Get("with_shared") != "false" {
+				http.Error(w, "want with_shared=false", 400)
+				return
+			}
+			// A project shared into the group from another namespace, as a
+			// GitLab that ignores with_shared would still list it.
+			io.WriteString(w, `[{"path_with_namespace": "platform/tools/cli", "forked_from_project": {"id": 1}},
+				{"path_with_namespace": "other-team/tool"},
+				{"path_with_namespace": "platform/tools-old/x"}]`)
 		case "/api/v4/projects/platform%2Ftools%2Fcli/releases/v1":
 			io.WriteString(w, `{"tag_name": "v1", "released_at": "2026-10-01T00:00:00Z", "created_at": "2026-11-01T00:00:00Z"}`)
 		case "/api/v4/projects/platform%2Ftools%2Fcli/releases":
@@ -227,8 +235,8 @@ func TestGitLabEscapesPathsAndExternalLinks(t *testing.T) {
 	}
 	ctx := context.Background()
 	repos, err := c.ListRepos(ctx, "platform/tools", true)
-	if err != nil || len(repos) != 1 || !repos[0].Fork {
-		t.Fatalf("repos = %+v, %v", repos, err)
+	if err != nil || len(repos) != 1 || repos[0].Path != "platform/tools/cli" || !repos[0].Fork {
+		t.Fatalf("repos = %+v, %v; want only platform/tools/cli, not projects outside the group", repos, err)
 	}
 	rels, _, err := c.Releases(ctx, repos[0].Path, time.Time{}, "")
 	// The ID adds the creation time, so a release re-created under the
@@ -343,5 +351,25 @@ func TestForgejoAssetTimes(t *testing.T) {
 	}
 	if _, found, err := c.Release(context.Background(), "org/tool", "8"); err != nil || found {
 		t.Errorf("deleted release by ID: found %v, err %v", found, err)
+	}
+}
+
+// Without recursive, a subgroup's project is not the group's, even if
+// GitLab lists it.
+func TestGitLabNonRecursiveKeepsDirectProjects(t *testing.T) {
+	f, _ := tlsForge(t, "gitlab", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("include_subgroups") != "false" {
+			http.Error(w, "want no subgroups", 400)
+			return
+		}
+		io.WriteString(w, `[{"path_with_namespace": "Platform/cli"}, {"path_with_namespace": "platform/sub/x"}]`)
+	}))
+	c, err := New(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repos, err := c.ListRepos(context.Background(), "platform", false)
+	if err != nil || len(repos) != 1 || repos[0].Path != "Platform/cli" {
+		t.Fatalf("repos = %+v, %v; want only Platform/cli", repos, err)
 	}
 }

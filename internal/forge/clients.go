@@ -223,15 +223,25 @@ type glProject struct {
 	} `json:"forked_from_project"`
 }
 
+// ListRepos lists the projects of a group, and of its subgroups when
+// recursive. GitLab also lists projects of other namespaces shared into
+// the group, unless with_shared is false; those are not the group's, so
+// projects outside its path are dropped as well.
 func (g *gitlab) ListRepos(ctx context.Context, group string, recursive bool) ([]Repo, error) {
-	q := url.Values{"per_page": {"100"}, "include_subgroups": {strconv.FormatBool(recursive)}}
+	q := url.Values{"per_page": {"100"}, "include_subgroups": {strconv.FormatBool(recursive)},
+		"with_shared": {"false"}}
 	list, _, err := pages[glProject](ctx, g.http, g.http.api("/groups/"+escapeAll(group)+"/projects", q), "", 100, nil)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Repo, len(list))
-	for i, p := range list {
-		out[i] = Repo{Path: p.PathWithNamespace, Archived: p.Archived, Fork: p.ForkedFrom != nil}
+	prefix := strings.ToLower(strings.Trim(group, "/")) + "/"
+	var out []Repo
+	for _, p := range list {
+		rest, ok := strings.CutPrefix(strings.ToLower(p.PathWithNamespace), prefix)
+		if !ok || rest == "" || (!recursive && strings.Contains(rest, "/")) {
+			continue
+		}
+		out = append(out, Repo{Path: p.PathWithNamespace, Archived: p.Archived, Fork: p.ForkedFrom != nil})
 	}
 	return out, nil
 }
