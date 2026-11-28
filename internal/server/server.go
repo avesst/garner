@@ -77,9 +77,12 @@ type Server struct {
 	Formats   *format.Registry
 	Ingester  *ingest.Ingester
 	Publisher *publish.Publisher
-	Scheduler *publish.Scheduler
-	Syncer    Syncer
-	Config    func() *config.Config
+	// PublishNow publishes at once, as a scheduled publish does, metrics
+	// and GC included.
+	PublishNow func(context.Context) (*store.Snapshot, error)
+	Scheduler  *publish.Scheduler
+	Syncer     Syncer
+	Config     func() *config.Config
 	// ConfigCommit returns the git commit of the configuration, or "".
 	ConfigCommit func() string
 	Reload       func() error

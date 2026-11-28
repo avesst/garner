@@ -87,6 +87,7 @@ func newFixture(t *testing.T) *fixture {
 		Publisher: &publish.Publisher{Store: f.st, Blobs: blobs, Formats: reg, Config: conf,
 			Signer: func() signing.Signer { return keys }, Root: root, Log: log},
 	}
+	s.PublishNow = s.Publisher.Publish
 	f.h = s.Handler()
 	f.in = s.Ingester
 	for name, scopes := range map[string][]string{

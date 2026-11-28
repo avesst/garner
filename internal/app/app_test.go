@@ -3,12 +3,15 @@ package app
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/avesst/garner/internal/auth"
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/deb"
 	"github.com/avesst/garner/internal/format"
@@ -213,6 +216,35 @@ func TestResignLeavesKeyUnrecordedForUnconfiguredFormat(t *testing.T) {
 
 // garner_signing_resign_pending reports a signing key that differs from
 // the one recorded after the last re-sign.
+// garner publish goes through the same path as a scheduled publish, so its
+// duration, time and failures reach the metrics.
+func TestAPIPublishRecordsMetrics(t *testing.T) {
+	a, _, err := openWith(t, "deb: {}\n", debOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	secret, _, err := auth.CreateToken(context.Background(), &a.Store.Queries, "pub", "team", []string{auth.ScopePublish})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/publish", nil)
+	r.RemoteAddr = "127.0.0.1:5000"
+	r.SetBasicAuth("pub", secret)
+	w := httptest.NewRecorder()
+	a.Server().Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/v1/publish = %d: %s", w.Code, w.Body)
+	}
+	var out strings.Builder
+	a.Metrics.Write(&out)
+	for _, name := range []string{"garner_publish_duration_seconds ", "garner_publish_last_success_timestamp_seconds "} {
+		if !strings.Contains(out.String(), "\n"+name) {
+			t.Errorf("metrics lack %s after a publish through the API", strings.TrimSpace(name))
+		}
+	}
+}
+
 func TestResignPendingMetric(t *testing.T) {
 	a, _, err := openWith(t, "deb: {}\n", debOnly)
 	if err != nil {

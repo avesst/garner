@@ -274,7 +274,8 @@ one, and places them so the next publish keeps them. No body.
 
 ### `POST /api/v1/publish`
 
-Publishes now, without waiting for the 10-second debounce. No parameters.
+Publishes now, without waiting for the 10-second debounce, then runs GC, as
+a scheduled publish does. No parameters.
 
 | Code | When |
 |---|---|

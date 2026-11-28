@@ -594,7 +594,7 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) publishNow(w http.ResponseWriter, r *http.Request) {
-	snap, err := s.Publisher.Publish(r.Context())
+	snap, err := s.PublishNow(r.Context())
 	if err != nil {
 		s.internal(w, err)
 		return

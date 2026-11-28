@@ -29,7 +29,7 @@ metrics:
 |---|---|
 | `garner_publish_last_success_timestamp_seconds` | When the last publish succeeded |
 | `garner_publish_duration_seconds` | How long publishes take |
-| `garner_publish_errors_total` | Failed publishes; garner retries them |
+| `garner_publish_errors_total` | Failed publishes; garner retries them, except one asked for with `garner publish`, which reports the error |
 | `garner_sync_last_success_timestamp_seconds{source}` | When each source last synced without error |
 | `garner_sync_errors_total{source}` | Failed sync runs per source |
 | `garner_sync_packages_added_total{source}` | Packages each source delivered |

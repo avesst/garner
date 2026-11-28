@@ -392,27 +392,34 @@ func (a *App) resignIfNeeded(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) publishAndCollect(ctx context.Context) error {
+// publishNow publishes, records the publish metrics and runs GC: every
+// publish goes through it, scheduled or asked for through the API.
+func (a *App) publishNow(ctx context.Context) (*store.Snapshot, error) {
 	start := time.Now()
-	_, err := a.Publisher.Publish(ctx)
+	snap, err := a.Publisher.Publish(ctx)
 	if err != nil {
 		a.publishErrors.Inc()
 		a.Log.Error("publish failed", "err", err)
-		return err
+		return nil, err
 	}
 	a.publishDuration.Set(time.Since(start).Seconds())
 	a.publishLast.Set(float64(time.Now().Unix()))
 	if _, err := a.Publisher.GC(ctx); err != nil {
 		a.Log.Error("gc failed", "err", err)
 	}
-	return nil
+	return snap, nil
+}
+
+func (a *App) publishAndCollect(ctx context.Context) error {
+	_, err := a.publishNow(ctx)
+	return err
 }
 
 // Server returns the HTTP server for this app.
 func (a *App) Server() *server.Server {
 	return &server.Server{
 		Store: a.Store, Formats: a.Formats, Ingester: a.Ingester, Publisher: a.Publisher,
-		Scheduler: a.Scheduler, Syncer: a.Syncer, Config: a.Config, ConfigCommit: a.ConfigCommit,
+		PublishNow: a.publishNow, Scheduler: a.Scheduler, Syncer: a.Syncer, Config: a.Config, ConfigCommit: a.ConfigCommit,
 		Reload: a.Reload, Metrics: a.Metrics, Root: a.Config().Storage.Path, Version: a.Version,
 		Log: a.Log, MetricsSeparate: a.Config().Metrics.Listen != "", Live: a.Live,
 	}
