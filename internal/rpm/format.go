@@ -221,10 +221,25 @@ gpgkey=%[2]s/key.asc
 // repomd.xml and carries over earlier repodata (section 9).
 func (f *Format) Render(ctx context.Context, r *format.RenderRequest) error {
 	c := r.Config
+	// createrepo_c caches each package's checksum, so unchanged packages
+	// need only their header read, not the whole file: on NFS a publish
+	// otherwise fetches the entire rpm repository. Headers are parsed on
+	// every run, so only checksums are reused. Entries do not record the
+	// checksum type, so the directory names it.
+	cache := ""
+	if r.CacheDir != "" {
+		cache = filepath.Join(r.CacheDir, "createrepo-sha256")
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			return err
+		}
+		if !checkChecksumCache(cache, r.Packages) {
+			cache = ""
+		}
+	}
 	for _, rel := range c.RPM.Releases {
 		for _, arch := range repoArches(c) {
 			out := filepath.Join(r.Dir, rel, arch)
-			if err := f.renderRepo(ctx, r, rel, arch, out); err != nil {
+			if err := f.renderRepo(ctx, r, rel, arch, out, cache); err != nil {
 				return fmt.Errorf("%s/%s: %w", rel, arch, err)
 			}
 		}
@@ -232,7 +247,46 @@ func (f *Format) Render(ctx context.Context, r *format.RenderRequest) error {
 	return nil
 }
 
-func (f *Format) renderRepo(ctx context.Context, r *format.RenderRequest, rel, arch, out string) error {
+// checkChecksumCache keeps only the cache entries whose checksum is the one
+// garner serves for that file name, and reports whether the cache can be
+// used. createrepo_c names an entry "<file name>-<key fields>" and stores
+// the file's checksum in it. Its key does not tell a re-signed rpm from
+// the one it replaces: both have the same name and main header. A file
+// name served as more than one blob, such as in two releases, turns the
+// cache off, since an entry could be right for only one of them. Any error
+// turns it off too: a stale entry left in place would be listed.
+func checkChecksumCache(dir string, pkgs []*format.Package) bool {
+	served := map[string]string{}
+	ok := true
+	for _, p := range pkgs {
+		name := poolFile(p.Name, p.Version, p.Release, p.Arch)
+		if s, seen := served[name]; seen && s != p.ServedSHA256() {
+			ok = false
+		}
+		served[name] = p.ServedSHA256()
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		keep := false
+		if i := strings.LastIndex(e.Name(), ".rpm-"); i >= 0 && ok {
+			if want, found := served[e.Name()[:i+len(".rpm")]]; found {
+				got, err := os.ReadFile(filepath.Join(dir, e.Name()))
+				keep = err == nil && strings.TrimSpace(string(got)) == want
+			}
+		}
+		if !keep {
+			if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !os.IsNotExist(err) {
+				ok = false
+			}
+		}
+	}
+	return ok
+}
+
+func (f *Format) renderRepo(ctx context.Context, r *format.RenderRequest, rel, arch, out, cache string) error {
 	// createrepo_c records paths relative to the directory it scans, so
 	// the pool is mirrored as hardlinks into a work directory.
 	work := filepath.Join(r.Dir, ".work-"+rel+"-"+arch)
@@ -252,8 +306,12 @@ func (f *Format) renderRepo(ctx context.Context, r *format.RenderRequest, rel, a
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, f.createrepo, "--quiet", "--no-database", "--unique-md-filenames",
-		"--general-compress-type=zstd", "--outputdir", out, work)
+	args := []string{"--quiet", "--no-database", "--unique-md-filenames",
+		"--general-compress-type=zstd", "--outputdir", out}
+	if cache != "" {
+		args = append(args, "--cachedir", cache)
+	}
+	cmd := exec.CommandContext(ctx, f.createrepo, append(args, work)...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("createrepo_c: %v: %s", err, bytes.TrimSpace(b))
 	}

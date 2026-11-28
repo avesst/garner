@@ -1,13 +1,19 @@
 package rpm
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/xml"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/avesst/garner/internal/config"
 	"github.com/avesst/garner/internal/format"
+	"github.com/avesst/garner/internal/signing"
 )
 
 func TestCarryRepodataOnlyListedFiles(t *testing.T) {
@@ -45,6 +51,161 @@ func TestCarryRepodataOnlyListedFiles(t *testing.T) {
 	if err := carryRepodata(filepath.Join(dir, "missing"), newDir); err != nil {
 		t.Error(err)
 	}
+}
+
+// createrepo_c keeps each package's checksum in CacheDir, so a publish
+// reads only the headers of unchanged packages, not every file: on NFS a
+// full read made each publish fetch the whole rpm repository.
+func TestRenderChecksumCache(t *testing.T) {
+	createrepo, err := exec.LookPath("createrepo_c")
+	if err != nil {
+		t.Skip("createrepo_c not installed")
+	}
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "key.asc")
+	if _, err := signing.GenerateBits(keyFile, "garner", "garner@example.com", 2048); err != nil {
+		t.Fatal(err)
+	}
+	k, err := signing.Load([]signing.KeySource{{KeyFile: keyFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpm, err := os.ReadFile(filepath.Join("testdata", "garner-hello-1.0-1.noarch.rpm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(rpm)
+	p := &format.Package{Format: "rpm", Name: "garner-hello", Version: "1.0", Release: "1", Arch: "noarch",
+		BlobSHA256: hex.EncodeToString(sum[:]), Distribution: "stable"}
+	f := &Format{createrepo: createrepo}
+	pool := filepath.Join(dir, "pool")
+	poolFile := filepath.Join(pool, filepath.FromSlash(f.PoolPath(p)))
+	if err := os.MkdirAll(filepath.Dir(poolFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(poolFile, rpm, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.RPM.Releases = []string{"stable"}
+	cfg.RPM.Architectures = []string{"x86_64"}
+	cache := filepath.Join(dir, "cache")
+	render := func(name, cacheDir string, pkgs []*format.Package) string {
+		t.Helper()
+		out := filepath.Join(dir, name)
+		err := f.Render(context.Background(), &format.RenderRequest{Dir: out, Packages: pkgs,
+			Config: cfg, Signer: k, PoolDir: pool, CacheDir: cacheDir})
+		if err != nil {
+			t.Fatalf("render %s: %v", name, err)
+		}
+		return out
+	}
+	entries := func() []string {
+		t.Helper()
+		es, err := os.ReadDir(filepath.Join(cache, "createrepo-sha256"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range es {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	setEntry := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(cache, "createrepo-sha256", name), []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// variant is p served as another blob: a hardlink to the same file at
+	// that blob's pool path, so name, header, size and mtime all match.
+	variant := func(served, dist string) *format.Package {
+		t.Helper()
+		q := *p
+		q.SignedSHA256, q.Distribution = served, dist
+		path := filepath.Join(pool, filepath.FromSlash(f.PoolPath(&q)))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(poolFile, path); err != nil && !os.IsExist(err) {
+			t.Fatal(err)
+		}
+		return &q
+	}
+	fake := strings.Repeat("ab", 32)
+
+	plain := render("plain", "", []*format.Package{p})
+	cached := render("cached", cache, []*format.Package{p})
+	if a, b := primaryChecksum(t, plain), primaryChecksum(t, cached); a != b {
+		t.Errorf("primary metadata with the cache is %s, without it %s", b, a)
+	}
+	es := entries()
+	if len(es) != 1 || !strings.HasPrefix(es[0], "garner-hello-1.0-1.noarch.rpm-") {
+		t.Fatalf("cache holds %v, want one entry for garner-hello", es)
+	}
+
+	// An entry whose checksum is not the one garner serves is never used.
+	// A re-signed rpm keeps its name and main header, which createrepo_c's
+	// key covers, so its old checksum would otherwise be listed.
+	setEntry(es[0], fake)
+	if got := render("stale", cache, []*format.Package{p}); primaryChecksum(t, got) != primaryChecksum(t, plain) {
+		t.Error("a cached checksum other than the served one was used")
+	}
+
+	// An entry that matches the served checksum is used, not recomputed:
+	// the cached value reaches the metadata although the file differs.
+	trusted := variant(fake, "stable")
+	setEntry(entries()[0], fake)
+	if got := render("trusted", cache, []*format.Package{trusted}); primaryChecksum(t, got) == primaryChecksum(t, plain) {
+		t.Error("a cached checksum equal to the served one was not used")
+	}
+
+	// One file name served as two blobs, here in two releases, turns the
+	// cache off: an entry could only be right for one of them.
+	cfg.RPM.Releases = []string{"stable", "other"}
+	both := render("both", cache, []*format.Package{p, variant(fake, "other")})
+	if primaryChecksum(t, both) != primaryChecksum(t, plain) {
+		t.Error("stable lists another checksum when the same file name is served twice")
+	}
+	if es := entries(); len(es) != 0 {
+		t.Errorf("cache holds %v for a file name served as two blobs, want nothing", es)
+	}
+	cfg.RPM.Releases = []string{"stable"}
+
+	// A package that is no longer rendered loses its entry.
+	render("refill", cache, []*format.Package{p})
+	render("empty", cache, nil)
+	if es := entries(); len(es) != 0 {
+		t.Errorf("cache holds %v after rendering without the package, want nothing", es)
+	}
+}
+
+// primaryChecksum returns the open-checksum of the primary metadata in the
+// stable/x86_64 repository below dir.
+func primaryChecksum(t *testing.T, dir string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "stable", "x86_64", "repodata", "repomd.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md struct {
+		Data []struct {
+			Type         string `xml:"type,attr"`
+			OpenChecksum string `xml:"open-checksum"`
+		} `xml:"data"`
+	}
+	if err := xml.Unmarshal(data, &md); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range md.Data {
+		if d.Type == "primary" {
+			return d.OpenChecksum
+		}
+	}
+	t.Fatalf("no primary metadata in %s", dir)
+	return ""
 }
 
 func TestPoolPathAndClient(t *testing.T) {

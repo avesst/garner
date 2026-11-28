@@ -102,6 +102,10 @@ type RenderRequest struct {
 	History []string
 	// Tags are the tags on Packages.
 	Tags []Tag
+	// CacheDir is storage/cache/<format>: kept across publishes, never
+	// served, and safe to delete. A format keeps data there that saves
+	// work in later publishes; "" disables it.
+	CacheDir string
 }
 
 // ClientFile is a generated client configuration file, such as

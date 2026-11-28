@@ -33,6 +33,9 @@ Everything else lives under `storage.path`, `/var/lib/garner` by default:
                                   the UI, keys and client files
   uploads/                      image pushes in progress
   tmp/                          files being written
+  cache/rpm/                    checksums of rpm packages, so a publish
+                                  need not read every package; safe to
+                                  delete
   public/                       the tree clients read
     current -> ../snapshots/<id>
     deb/, rpm/, v2, index.html, key.asc, ...   fixed links through current

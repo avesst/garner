@@ -390,6 +390,7 @@ func (p *Publisher) publish(ctx context.Context, cfg *config.Config, pkgs []*for
 		err := fm.Render(ctx, &format.RenderRequest{
 			Dir: filepath.Join(tmp, fm.Name()), Packages: fp, Config: cfg, Signer: signer,
 			PoolDir: p.poolDir(fm.Name()), History: hist, Tags: tagsByFormat[fm.Name()],
+			CacheDir: filepath.Join(p.Root, "cache", fm.Name()),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", fm.Name(), err)

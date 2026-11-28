@@ -220,6 +220,9 @@ gpgkey=https://repo.example.com/key.asc
   pool/rpm/...                        hardlinks into blobs/
   pool/oci/sha256:<hex>               hardlinks into blobs/ (section 19)
   uploads/<id>                        image blob uploads in progress
+  cache/<format>/                     rebuildable data that saves work in
+                                      later publishes; never served.
+                                      rpm: createrepo_c's checksum cache
   snapshots/<id>/                     metadata only:
     deb/dists/...
     rpm/<rel>/<arch>/repodata/...
