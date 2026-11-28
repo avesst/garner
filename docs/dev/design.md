@@ -1212,6 +1212,16 @@ Whether its database is PostgreSQL is open (section 16).
 - **Connection poolers.** Session advisory locks and `LISTEN/NOTIFY` do not
   work through PgBouncer in transaction mode. Require a direct connection or
   a session-mode pooler, and make `/readyz` detect a lock that does not hold.
+- **Publish cost on shared storage.** A publish renders every repository
+  from scratch into a new snapshot directory, and for rpm first fills a
+  work directory per release and architecture with hardlinks into the pool.
+  On NFS every file touched costs round trips, so the cost grows with the
+  number of packages. With 536 real packages on NFSv4.2 over 1 Gbit, a
+  publish made about 15,000 NFS operations and took 12.5 s, against 1.2 s on
+  local disk: about 23 ms per package, which would reach minutes at a few
+  thousand packages. To investigate: render on local disk and copy only the
+  finished metadata into storage, with createrepo_c reaching the pool
+  through symlinks instead of hardlinks.
 
 ### Migration from SQLite to PostgreSQL
 

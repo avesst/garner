@@ -51,6 +51,8 @@ Deb first, end to end, then rpm. Each slice ends in something that runs.
   none against GitHub with a token or an organization.
 - On a real host, held packages and `approve`, a sync that adds a release,
   and a GC that deletes anything. Unit and e2e tests cover them.
+- Storage on NFS: a crash or reboot during a publish, NFS servers other
+  than Linux knfsd, and several nodes on one storage directory.
 
 ## Verified on a test host
 
@@ -76,6 +78,16 @@ distribution, apt and dnf (`gpgcheck` and `repo_gpgcheck` on) downloaded
 every indexed package and checked it against the indexes and, for rpm,
 the key. Packages were not installed. A build of the verify branch then
 reported no problems on that tree.
+
+On 2026-11-27 and 28, builds from `eb7cc0a` to `7ca0101` ran with storage
+on NFSv4.2 (Linux knfsd, `hard` mount) and the database on local disk, on
+two Debian 13 VMs with traffic shaped to 1 Gbit and 0.7 ms round trips.
+Uploads, publish, `verify`, apt, dnf, image push and pull, and GC worked. A
+30 s NFS server outage paused requests, which then completed without
+errors. The same 536 real packages published in 12.5 s, against 1.2 s on
+local disk (design section 18, publish cost on shared storage). GC fails
+while a client still reads a file it removes: NFS keeps the file as
+`.nfs*`, which cannot be deleted while open.
 
 ## Repository verification (after 0.1.0)
 
