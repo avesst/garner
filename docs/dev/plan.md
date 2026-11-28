@@ -85,9 +85,10 @@ two Debian 13 VMs with traffic shaped to 1 Gbit and 0.7 ms round trips.
 Uploads, publish, `verify`, apt, dnf, image push and pull, and GC worked. A
 30 s NFS server outage paused requests, which then completed without
 errors. The same 536 real packages published in 12.5 s, against 1.2 s on
-local disk (design section 18, publish cost on shared storage). GC fails
-while a client still reads a file it removes: NFS keeps the file as
-`.nfs*`, which cannot be deleted while open.
+local disk (design section 18, publish cost on shared storage). GC failed
+while a client still read a file it removed, since NFS keeps such a file as
+`.nfs*`, which cannot be deleted while open; it now leaves the file for a
+later run.
 
 ## Repository verification (after 0.1.0)
 

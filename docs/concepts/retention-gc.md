@@ -54,6 +54,11 @@ A file is deleted only when nothing that is kept refers to it. Layers
 shared by several images, or one `.deb` placed in two suites, stay as long
 as one of them is kept.
 
+With the storage directory on NFS, a deleted file that a client is still
+downloading stays as a `.nfs…` file until the download ends. GC leaves it
+and removes it in a later run; `in_use` in its result and log counts such
+files.
+
 ## Why it works this way
 
 - **Retention by version, not by age.** A package that rarely changes

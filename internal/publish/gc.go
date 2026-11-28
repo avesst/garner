@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/avesst/garner/internal/format"
@@ -19,6 +20,9 @@ type GCResult struct {
 	Blobs     int      `json:"blobs"`
 	PoolFiles int      `json:"pool_files"`
 	TempFiles int      `json:"temp_files"`
+	// InUse counts files and snapshots left for a later run because a
+	// client still has a file open (removeUnlessInUse).
+	InUse int `json:"in_use"`
 }
 
 // GC removes snapshots beyond storage.snapshot_retention whose successor
@@ -55,8 +59,14 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		if now.Sub(replaced) < grace {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(p.snapshotsDir(), s.ID)); err != nil {
+		busy, err := removeUnlessInUse(filepath.Join(p.snapshotsDir(), s.ID))
+		if err != nil {
 			return nil, err
+		}
+		if busy {
+			// Its row stays, so the next run removes the rest.
+			res.InUse++
+			continue
 		}
 		if err := p.Store.DeleteSnapshot(ctx, s.ID); err != nil {
 			return nil, err
@@ -90,13 +100,14 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 	for _, fm := range p.Formats.All() {
 		root := p.poolDir(fm.Name())
 		garbage := poolGarbage(fm, root, live)
-		n, err := sweep(root, func(path string, d fs.DirEntry) bool {
+		n, busy, err := sweep(root, func(path string, d fs.DirEntry) bool {
 			return garbage(path)
 		})
 		if err != nil {
 			return nil, err
 		}
 		res.PoolFiles += n
+		res.InUse += busy
 	}
 
 	for _, sha := range gone {
@@ -121,7 +132,7 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		return err == nil && now.Sub(info.ModTime()) > grace
 	}
 	var orphans []string
-	n, err := sweep(filepath.Join(p.Root, "blobs", "sha256"), func(path string, d fs.DirEntry) bool {
+	n, busy, err := sweep(filepath.Join(p.Root, "blobs", "sha256"), func(path string, d fs.DirEntry) bool {
 		if _, ok := known[d.Name()]; ok || live[d.Name()] || !old(d) {
 			return false
 		}
@@ -135,6 +146,7 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		return nil, err
 	}
 	res.Blobs += n
+	res.InUse += busy
 	for _, sha := range orphans {
 		removed, err := p.removeBlob(ctx, sha)
 		if err != nil {
@@ -145,11 +157,12 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		}
 	}
 	for _, dir := range []string{filepath.Join(p.Root, "blobs", "tmp"), filepath.Join(p.Root, "tmp")} {
-		n, err := sweepTemp(dir, now.Add(-grace))
+		n, busy, err := sweepTemp(dir, now.Add(-grace))
 		if err != nil {
 			return nil, err
 		}
 		res.TempFiles += n
+		res.InUse += busy
 	}
 	entries, err := os.ReadDir(p.snapshotsDir())
 	if err != nil && !os.IsNotExist(err) {
@@ -163,13 +176,18 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		switch {
 		case !old(e) || recorded[e.Name()]:
 		case strings.HasSuffix(e.Name(), ".tmp"):
-			os.RemoveAll(filepath.Join(p.snapshotsDir(), e.Name()))
+			removeAll(filepath.Join(p.snapshotsDir(), e.Name()))
 			res.TempFiles++
 		default:
 			// Renamed into place, but the publish crashed before
 			// recording it.
-			if err := os.RemoveAll(filepath.Join(p.snapshotsDir(), e.Name())); err != nil {
+			busy, err := removeUnlessInUse(filepath.Join(p.snapshotsDir(), e.Name()))
+			if err != nil {
 				return nil, err
+			}
+			if busy {
+				res.InUse++
+				continue
 			}
 			res.Snapshots = append(res.Snapshots, e.Name())
 		}
@@ -180,7 +198,7 @@ func (p *Publisher) GC(ctx context.Context) (*GCResult, error) {
 		}
 	}
 	p.Log.Info("gc finished", "snapshots", len(res.Snapshots), "blobs", res.Blobs,
-		"pool_files", res.PoolFiles, "temp_files", res.TempFiles)
+		"pool_files", res.PoolFiles, "temp_files", res.TempFiles, "in_use", res.InUse)
 	return res, nil
 }
 
@@ -209,12 +227,30 @@ func (p *Publisher) removeBlob(ctx context.Context, sha string) (bool, error) {
 	return removed && err == nil, err
 }
 
+// removeAll is os.RemoveAll; tests replace it to simulate a file in use.
+var removeAll = os.RemoveAll
+
+// removeUnlessInUse removes path, or reports true when a file in it is
+// still open over NFS. An NFS client keeps a deleted file that is still open
+// as .nfs* in the same directory until it is closed: removing that name
+// fails with EBUSY, and removing its directory with ENOTEMPTY. Failing GC
+// on it would stall every later step while a single client downloads, so
+// it is left for a later run. Nothing writes into what GC removes, except a
+// temp directory's owner, which is also a reason to come back later.
+func removeUnlessInUse(path string) (bool, error) {
+	err := removeAll(path)
+	if errors.Is(err, syscall.EBUSY) || errors.Is(err, syscall.ENOTEMPTY) {
+		return true, nil
+	}
+	return false, err
+}
+
 // sweep removes the regular files below root for which remove returns
-// true, then the directories left empty. A missing root is not an error.
-func sweep(root string, remove func(path string, d fs.DirEntry) bool) (int, error) {
-	n := 0
+// true, then the directories left empty, and reports how many it removed
+// and how many were in use. A missing root is not an error.
+func sweep(root string, remove func(path string, d fs.DirEntry) bool) (n, inUse int, err error) {
 	var dirs []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if os.IsNotExist(err) && path == root {
 				return filepath.SkipDir
@@ -228,32 +264,50 @@ func sweep(root string, remove func(path string, d fs.DirEntry) bool) (int, erro
 			return nil
 		}
 		if remove(path, d) {
-			if err := os.RemoveAll(path); err != nil {
+			busy, err := removeUnlessInUse(path)
+			if err != nil {
 				return err
 			}
-			n++
+			if busy {
+				inUse++
+			} else {
+				n++
+			}
 		}
 		return nil
 	})
 	for i := len(dirs) - 1; i >= 0; i-- {
 		os.Remove(dirs[i]) // fails, harmlessly, unless empty
 	}
-	return n, err
+	return n, inUse, err
 }
 
 // sweepTemp removes the stale entries directly below root (staleTemp)
 // and returns how many files went with them.
-func sweepTemp(root string, cutoff time.Time) (int, error) {
-	stale, n, err := staleTemp(root, cutoff)
+func sweepTemp(root string, cutoff time.Time) (removed, inUse int, err error) {
+	stale, _, err := staleTemp(root, cutoff)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	for _, path := range stale {
-		if err := os.RemoveAll(path); err != nil {
-			return 0, err
+	for _, e := range stale {
+		busy, err := removeUnlessInUse(e.path)
+		if err != nil {
+			return removed, inUse, err
 		}
+		if busy {
+			inUse++
+			continue
+		}
+		removed += e.files
 	}
-	return n, nil
+	return removed, inUse, nil
+}
+
+// tempEntry is an entry directly below a temp directory and the number of
+// files it holds.
+type tempEntry struct {
+	path  string
+	files int
 }
 
 // staleTemp returns the entries directly below root that nothing has
@@ -263,7 +317,7 @@ func sweepTemp(root string, cutoff time.Time) (int, error) {
 // empty directory may be waiting for its first file. Whoever holds a temp
 // directory and may pause longer than gc_grace without writing to it
 // touches it (sync.syncRelease). A missing root is not an error.
-func staleTemp(root string, cutoff time.Time) ([]string, int, error) {
+func staleTemp(root string, cutoff time.Time) ([]tempEntry, int, error) {
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return nil, 0, nil
@@ -271,7 +325,7 @@ func staleTemp(root string, cutoff time.Time) ([]string, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	var stale []string
+	var stale []tempEntry
 	n := 0
 	for _, e := range entries {
 		path := filepath.Join(root, e.Name())
@@ -298,7 +352,7 @@ func staleTemp(root string, cutoff time.Time) ([]string, int, error) {
 			return nil, 0, err
 		}
 		if !fresh {
-			stale = append(stale, path)
+			stale = append(stale, tempEntry{path, files})
 			n += files
 		}
 	}
