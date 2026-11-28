@@ -108,6 +108,60 @@ func TestPrepareReplacesUpstreamSignature(t *testing.T) {
 	}
 }
 
+// gpg's home must stay out of tmpDir, which is under the storage directory
+// and may be on NFS: there its keyring and sockets cost round trips, and
+// files gpg-agent still holds open block the directory's removal.
+func TestPrepareKeepsGPGHomeOutOfTmpDir(t *testing.T) {
+	tools := map[string]string{}
+	for _, name := range []string{"rpmsign", "gpg", "gpgconf"} {
+		p, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s not installed", name)
+		}
+		tools[name] = p
+	}
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "key.asc")
+	if _, err := signing.GenerateBits(keyFile, "garner", "garner@example.com", 2048); err != nil {
+		t.Fatal(err)
+	}
+	k, err := signing.Load([]signing.KeySource{{KeyFile: keyFile}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(dir, "local")
+	if err := os.Mkdir(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", local)
+	tmp := filepath.Join(dir, "prepare")
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := &Format{Signer: func() signing.Signer { return k },
+		rpmsign: tools["rpmsign"], gpg: tools["gpg"], gpgconf: tools["gpgconf"]}
+	signed, err := f.Prepare(context.Background(), filepath.Join("testdata", "garner-hello-1.0-1.noarch.rpm"), tmp)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if signed != filepath.Join(tmp, "package.rpm") {
+		t.Errorf("signed package at %s, want it in tmpDir", signed)
+	}
+	for d, want := range map[string]int{tmp: 1, local: 0} {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != want {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Errorf("%s after Prepare holds %v, want %d entries", d, names, want)
+		}
+	}
+}
+
 // checksig runs rpmkeys --checksig -v on file with only k's public keys
 // imported, and returns its output.
 func checksig(t *testing.T, rpmkeys string, k *signing.Keyring, file string) (string, error) {

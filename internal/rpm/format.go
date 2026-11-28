@@ -124,12 +124,19 @@ func (f *Format) Prepare(ctx context.Context, original, tmpDir string) (string, 
 	if err != nil {
 		return "", err
 	}
-	home := filepath.Join(tmpDir, "gnupg")
-	if err := os.Mkdir(home, 0o700); err != nil {
+	// gpg's home goes on local disk, not in tmpDir under the storage
+	// directory: on NFS its keyring writes and lock files cost round trips,
+	// and files gpg-agent still holds open while it exits turn into .nfs*
+	// files that block removing the directory. Only the package, which
+	// can be large, is written to tmpDir.
+	home, err := os.MkdirTemp("", "garner-gpg-")
+	if err != nil {
 		return "", err
 	}
+	// Deferred calls run last-in first-out: the agent is stopped first.
+	defer os.RemoveAll(home)
 	defer exec.Command(f.gpgconf, "--homedir", home, "--kill", "all").Run()
-	keyFile := filepath.Join(tmpDir, "key.asc")
+	keyFile := filepath.Join(home, "key.asc")
 	if err := os.WriteFile(keyFile, key, 0o600); err != nil {
 		return "", err
 	}

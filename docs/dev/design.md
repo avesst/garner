@@ -1192,7 +1192,8 @@ Whether its database is PostgreSQL is open (section 16).
 - Storage is shared (NFSv4 or CephFS): atomic swaps use `rename(2)`, writes are
   fsynced before rename, locks live in the database and never in `flock` on
   shared storage, and GC respects `gc_grace`, which must then cover the NFS
-  clients' `actimeo`.
+  clients' `actimeo`. Scratch state of external tools, such as gpg's home
+  for rpm re-signing, stays on local disk.
 - `database.url_file` holds the PostgreSQL URL.
 - Possible later still: separate roles (`--role=serve|worker`).
 - rpm re-signing happens at ingest (section 7), so every node that accepts
